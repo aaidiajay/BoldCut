@@ -329,9 +329,11 @@ fun EditorScreen() {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                "${fmt(posMs)} / ${fmt(totalMs())}",
+                "${fmt(posMs)}/${fmt(totalMs())}",
                 color = Color(0xFFB0B4BA),
-                fontSize = 13.sp,
+                fontSize = 12.sp,
+                maxLines = 1,
+                softWrap = false,
                 modifier = Modifier.weight(1f).padding(start = 4.dp)
             )
             SmallBtn("◆◀") { jumpMarker(false) }

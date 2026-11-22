@@ -50,11 +50,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.util.Locale
 import kotlin.math.ceil
 import kotlin.math.roundToInt
 
 const val DP_PER_SEC = 50f
-private const val TILE_DP = 56f
+private const val TILE_DP = 90f
+private const val MAX_FRAMES = 150
 private const val MIN_CLIP_MS = 300L
 private val Accent = Color(0xFFFFC107)
 private val MarkerColor = Color(0xFF2EC4B6)
@@ -193,13 +195,36 @@ private fun ClipBlock(
 ) {
     val ctx = LocalContext.current
     val density = LocalDensity.current
-    val tileMs = (TILE_DP / DP_PER_SEC * 1000).toLong()
-    val tileCount = ceil(clip.lengthMs / 1000f * DP_PER_SEC / TILE_DP).toInt().coerceIn(1, 400)
 
+    // Clip ko barabar frameCount hisson me baanto (lamba clip ho to bhi max 150 decode)
+    val clipWidthDp = clip.lengthMs / 1000f * DP_PER_SEC
+    val frameCount = ceil(clipWidthDp / TILE_DP).toInt().coerceIn(1, MAX_FRAMES)
+    val frameWidthDp = clipWidthDp / frameCount
+
+    // Thumbnails dheere-dheere aate hain (pehle har 4th frame, phir baaki),
+    // taaki lambe video me bhi turant kuch dikhe.
     val thumbs by produceState<List<ImageBitmap?>>(
-        emptyList(), clip.id, clip.trimStartMs, clip.trimEndMs
+        List(frameCount) { null }, clip.id, clip.trimStartMs, clip.trimEndMs
     ) {
-        value = withContext(Dispatchers.IO) { loadThumbs(ctx, clip, tileCount, tileMs) }
+        val r = MediaMetadataRetriever()
+        try {
+            val ok = withContext(Dispatchers.IO) {
+                runCatching { r.setDataSource(ctx, clip.uri) }.isSuccess
+            }
+            if (ok) {
+                val frames = arrayOfNulls<ImageBitmap>(frameCount)
+                val order = (0 until frameCount step 4) + (0 until frameCount).filter { it % 4 != 0 }
+                var done = 0
+                for (i in order) {
+                    frames[i] = withContext(Dispatchers.IO) { decodeFrame(r, clip, i, frameCount) }
+                    done++
+                    if (done % 3 == 0) value = fillGaps(frames)
+                }
+                value = fillGaps(frames)
+            }
+        } finally {
+            r.release()
+        }
     }
 
     // Trim drag ke time ka temporary change; ungli chhodne pe hi commit hota hai
@@ -238,14 +263,26 @@ private fun ClipBlock(
                         contentDescription = null,
                         contentScale = ContentScale.Crop,
                         modifier = Modifier
-                            .width(TILE_DP.dp)
+                            .width(frameWidthDp.dp)
                             .fillMaxHeight()
                     )
                 } else {
-                    Spacer(Modifier.width(TILE_DP.dp))
+                    Spacer(Modifier.width(frameWidthDp.dp))
                 }
             }
         }
+
+        // Duration label: thumbnails na bhi aayein to clip hamesha pehchaana jaye
+        Text(
+            durationLabel(clip.lengthMs),
+            color = Color.White,
+            fontSize = 10.sp,
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(4.dp)
+                .background(Color(0x99000000), RoundedCornerShape(3.dp))
+                .padding(horizontal = 4.dp)
+        )
 
         if (selected) {
             TrimHandle(
@@ -284,6 +321,9 @@ private fun ClipBlock(
     }
 }
 
+private fun durationLabel(ms: Long): String =
+    String.format(Locale.US, "%d:%02d", ms / 60000, (ms / 1000) % 60)
+
 @Composable
 private fun TrimHandle(modifier: Modifier, onDrag: (Float) -> Unit, onEnd: () -> Unit) {
     val drag by rememberUpdatedState(onDrag)
@@ -314,28 +354,36 @@ private fun TrimHandle(modifier: Modifier, onDrag: (Float) -> Unit, onEnd: () ->
     }
 }
 
-private fun loadThumbs(ctx: Context, clip: Clip, count: Int, tileMs: Long): List<ImageBitmap?> {
-    val r = MediaMetadataRetriever()
+private fun decodeFrame(r: MediaMetadataRetriever, clip: Clip, i: Int, count: Int): ImageBitmap? {
     return try {
-        r.setDataSource(ctx, clip.uri)
-        List(count) { i ->
-            val t = (clip.trimStartMs + i * tileMs + tileMs / 2)
-                .coerceAtMost(clip.trimEndMs - 1)
-                .coerceAtLeast(0L)
-            val b = r.getFrameAtTime(t * 1000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-            if (b == null) {
-                null
-            } else {
-                val w = 112
-                val h = (112f * b.height / b.width).toInt().coerceAtLeast(1)
-                val s = Bitmap.createScaledBitmap(b, w, h, true)
-                if (s !== b) b.recycle()
-                s.asImageBitmap()
-            }
+        val offset = ((i + 0.5) * clip.lengthMs / count).toLong()
+        val t = (clip.trimStartMs + offset).coerceIn(0L, maxOf(clip.trimEndMs - 1, 0L))
+        val b = r.getFrameAtTime(t * 1000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+        if (b == null) {
+            null
+        } else {
+            val w = 160
+            val h = (160f * b.height / b.width).toInt().coerceAtLeast(1)
+            val s = Bitmap.createScaledBitmap(b, w, h, true)
+            if (s !== b) b.recycle()
+            s.asImageBitmap()
         }
     } catch (e: Exception) {
-        emptyList()
-    } finally {
-        r.release()
+        null
     }
+}
+
+// Jo frames abhi decode nahi hue unki jagah pichla frame dikhao
+private fun fillGaps(frames: Array<ImageBitmap?>): List<ImageBitmap?> {
+    val out = ArrayList<ImageBitmap?>(frames.size)
+    var last: ImageBitmap? = null
+    for (f in frames) {
+        if (f != null) last = f
+        out.add(last)
+    }
+    val first = frames.firstOrNull { it != null }
+    for (i in out.indices) {
+        if (out[i] == null) out[i] = first else break
+    }
+    return out
 }
