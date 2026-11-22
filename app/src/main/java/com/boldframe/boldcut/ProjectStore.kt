@@ -100,6 +100,7 @@ class ProjectStore(ctx: Context) {
             co.put("durationMs", c.durationMs)
             co.put("trimStartMs", c.trimStartMs)
             co.put("trimEndMs", c.trimEndMs)
+            co.put("speed", c.speed.toDouble())
             ca.put(co)
         }
         o.put("clips", ca)
@@ -124,7 +125,8 @@ class ProjectStore(ctx: Context) {
                 Uri.parse(c.getString("uri")),
                 c.getLong("durationMs"),
                 c.getLong("trimStartMs"),
-                c.getLong("trimEndMs")
+                c.getLong("trimEndMs"),
+                c.optDouble("speed", 1.0).toFloat()
             )
         }
         val ma = o.optJSONArray("markers") ?: JSONArray()

@@ -13,9 +13,14 @@ data class Clip(
     val uri: Uri,
     val durationMs: Long,
     val trimStartMs: Long = 0L,
-    val trimEndMs: Long = durationMs
+    val trimEndMs: Long = durationMs,
+    val speed: Float = 1f
 ) {
-    val lengthMs: Long get() = trimEndMs - trimStartMs
+    // Timeline pe clip ki lambai (speed ke hisaab se)
+    val lengthMs: Long get() = ((trimEndMs - trimStartMs) / speed).toLong()
+
+    // Source video ki lambai (trim ke baad, speed ke bina)
+    val sourceLenMs: Long get() = trimEndMs - trimStartMs
 }
 
 // Abhi UI ek hi main video track use karta hai; baaki tracks aage Step me.

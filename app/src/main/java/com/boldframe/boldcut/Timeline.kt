@@ -1,6 +1,5 @@
 package com.boldframe.boldcut
 
-import android.content.Context
 import android.graphics.Bitmap
 import android.media.MediaMetadataRetriever
 import androidx.compose.foundation.Canvas
@@ -9,6 +8,9 @@ import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
@@ -23,9 +25,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -36,6 +42,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -43,7 +50,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -55,7 +64,7 @@ import java.util.Locale
 import kotlin.math.ceil
 import kotlin.math.roundToInt
 
-const val DP_PER_SEC = 50f
+const val BASE_DP_PER_SEC = 50f
 private const val TILE_DP = 90f
 private const val MAX_FRAMES = 150
 private const val MIN_CLIP_MS = 300L
@@ -64,8 +73,7 @@ private val MarkerColor = Color(0xFF2EC4B6)
 
 /**
  * CapCut-style timeline: playhead beech me fixed, clips scroll hote hain.
- * Playing ke time timeline player ko follow karta hai; pause me ungli se
- * scroll karne par player seek hota hai.
+ * Do ungliyon se pinch karke zoom (lambi/choti) hota hai.
  */
 @Composable
 fun Timeline(
@@ -75,6 +83,8 @@ fun Timeline(
     posMs: Long,
     playing: Boolean,
     scrollState: ScrollState,
+    dpPerSec: Float,
+    onZoom: (Float) -> Unit,
     onSelect: (Long) -> Unit,
     onSeek: (Long) -> Unit,
     onUserDrag: () -> Unit,
@@ -82,11 +92,14 @@ fun Timeline(
     onMarkerClick: (Marker) -> Unit
 ) {
     val density = LocalDensity.current
-    val pxPerMs = with(density) { DP_PER_SEC.dp.toPx() } / 1000f
+    val pxPerMs = with(density) { dpPerSec.dp.toPx() } / 1000f
     val dragged by scrollState.interactionSource.collectIsDraggedAsState()
     val playingNow by rememberUpdatedState(playing)
+    val posNow by rememberUpdatedState(posMs)
     val seek by rememberUpdatedState(onSeek)
+    val zoom by rememberUpdatedState(onZoom)
     val totalMs = clips.sumOf { it.lengthMs }
+    val pal = Bc.c
 
     LaunchedEffect(dragged) { if (dragged) onUserDrag() }
 
@@ -94,7 +107,14 @@ fun Timeline(
         if (playing) scrollState.scrollTo((posMs * pxPerMs).roundToInt())
     }
 
+    // Zoom badalne par playhead usi time pe rahe
     LaunchedEffect(pxPerMs) {
+        if (!playingNow) {
+            val target = (posNow * pxPerMs).roundToInt()
+            scrollState.scrollTo(target)
+            withFrameNanos { }
+            scrollState.scrollTo(target)
+        }
         snapshotFlow { scrollState.value }.collect { px ->
             if (!playingNow) seek((px / pxPerMs).toLong())
         }
@@ -104,7 +124,24 @@ fun Timeline(
         Modifier
             .fillMaxWidth()
             .height(104.dp)
-            .background(Bc.c.timelineBg)
+            .background(pal.timelineBg)
+            .pointerInput(Unit) {
+                // Do ungliyon ka pinch: Initial pass me dekhte hain taaki scroll se na takraye
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                    do {
+                        val event = awaitPointerEvent(PointerEventPass.Initial)
+                        val pressed = event.changes.filter { it.pressed }
+                        if (pressed.size >= 2) {
+                            val z = event.calculateZoom()
+                            if (z != 1f) {
+                                zoom(z)
+                                event.changes.forEach { if (it.positionChanged()) it.consume() }
+                            }
+                        }
+                    } while (event.changes.any { it.pressed })
+                }
+            }
     ) {
         val half = maxWidth / 2
         Box(Modifier.fillMaxSize()) {
@@ -113,7 +150,7 @@ fun Timeline(
                 Column {
                     val totalDp = with(density) { (totalMs * pxPerMs).toDp() }
                     Box(Modifier.width(totalDp).height(22.dp)) {
-                        Ruler(totalMs, Modifier.fillMaxSize(), Bc.c.tick)
+                        Ruler(totalMs, Modifier.fillMaxSize(), pal.tick, dpPerSec)
                         markers.filter { it.timeMs <= totalMs }.forEach { m ->
                             Box(
                                 Modifier
@@ -150,7 +187,7 @@ fun Timeline(
             if (clips.isEmpty()) {
                 Text(
                     "Neeche \"Add\" dabake video chuno",
-                    color = Bc.c.muted,
+                    color = pal.muted,
                     fontSize = 13.sp,
                     modifier = Modifier.align(Alignment.Center)
                 )
@@ -162,26 +199,56 @@ fun Timeline(
                     .align(Alignment.TopCenter)
                     .width(2.dp)
                     .fillMaxHeight()
-                    .background(Bc.c.text)
+                    .background(pal.text)
             )
+
+            // Zoom buttons
+            Row(
+                Modifier.align(Alignment.TopEnd).padding(4.dp),
+                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp)
+            ) {
+                ZoomBtn(Icons.Outlined.ZoomOut) { onZoom(0.7f) }
+                ZoomBtn(Icons.Outlined.ZoomIn) { onZoom(1.4f) }
+            }
         }
     }
 }
 
 @Composable
-private fun Ruler(totalMs: Long, modifier: Modifier, tick: Color) {
+private fun ZoomBtn(icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {
+    val pal = Bc.c
+    Box(
+        Modifier
+            .size(28.dp)
+            .clip(CircleShape)
+            .background(pal.surface.copy(alpha = 0.8f))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) { BcIcon(icon, tint = pal.text, size = 18.dp) }
+}
+
+@Composable
+private fun Ruler(totalMs: Long, modifier: Modifier, tick: Color, dpPerSec: Float) {
+    // Zoom ke hisaab se tick ki ginti badalti hai
+    val stepSec = when {
+        dpPerSec >= 40f -> 1
+        dpPerSec >= 15f -> 5
+        else -> 10
+    }
     Canvas(modifier) {
         val secs = (totalMs / 1000).toInt()
-        val pxSec = DP_PER_SEC.dp.toPx()
-        for (s in 0..secs) {
+        val pxSec = dpPerSec.dp.toPx()
+        var s = 0
+        while (s <= secs) {
             val x = s * pxSec
-            val h = if (s % 5 == 0) size.height * 0.7f else size.height * 0.35f
+            val h = if (s % (stepSec * 5) == 0) size.height * 0.7f else size.height * 0.35f
             drawLine(
                 tick,
                 Offset(x, size.height - h),
                 Offset(x, size.height),
                 1.dp.toPx()
             )
+            s += stepSec
         }
     }
 }
@@ -196,14 +263,14 @@ private fun ClipBlock(
 ) {
     val ctx = LocalContext.current
     val density = LocalDensity.current
+    val pal = Bc.c
 
-    // Clip ko barabar frameCount hisson me baanto (lamba clip ho to bhi max 150 decode)
-    val clipWidthDp = clip.lengthMs / 1000f * DP_PER_SEC
-    val frameCount = ceil(clipWidthDp / TILE_DP).toInt().coerceIn(1, MAX_FRAMES)
-    val frameWidthDp = clipWidthDp / frameCount
+    // Frames source video ki range se tay hote hain (zoom/speed se nahi), taaki baar-baar reload na ho
+    val srcLen = clip.sourceLenMs
+    val frameCount = ceil(srcLen / 1000f * BASE_DP_PER_SEC / TILE_DP).toInt().coerceIn(1, MAX_FRAMES)
+    val fullWidth = with(density) { (clip.lengthMs * pxPerMs).toDp() }
+    val frameWidth = fullWidth / frameCount
 
-    // Thumbnails dheere-dheere aate hain (pehle har 4th frame, phir baaki),
-    // taaki lambe video me bhi turant kuch dikhe.
     val thumbs by produceState<List<ImageBitmap?>>(
         List(frameCount) { null }, clip.id, clip.trimStartMs, clip.trimEndMs
     ) {
@@ -228,14 +295,25 @@ private fun ClipBlock(
         }
     }
 
-    // Trim drag ke time ka temporary change; ungli chhodne pe hi commit hota hai
-    var pendingLeft by remember(clip.id, clip.trimStartMs, clip.trimEndMs) { mutableLongStateOf(0L) }
-    var pendingRight by remember(clip.id, clip.trimStartMs, clip.trimEndMs) { mutableLongStateOf(0L) }
+    // Trim drag ke time ka temporary change (timeline ms me); ungli chhodne pe commit
+    var pendingLeft by remember(clip.id, clip.trimStartMs, clip.trimEndMs, clip.speed) { mutableLongStateOf(0L) }
+    var pendingRight by remember(clip.id, clip.trimStartMs, clip.trimEndMs, clip.speed) { mutableLongStateOf(0L) }
     val curClip by rememberUpdatedState(clip)
 
     val effLen = clip.lengthMs - pendingLeft + pendingRight
     val widthDp = with(density) { (effLen * pxPerMs).toDp() }
     val cropDp = with(density) { (pendingLeft * pxPerMs).toDp() }
+
+    fun commitTrim() {
+        if (pendingLeft != 0L || pendingRight != 0L) {
+            val c = curClip
+            onTrim(
+                c.id,
+                c.trimStartMs + (pendingLeft * c.speed).toLong(),
+                c.trimEndMs + (pendingRight * c.speed).toLong()
+            )
+        }
+    }
 
     val shape = RoundedCornerShape(4.dp)
     Box(
@@ -243,10 +321,10 @@ private fun ClipBlock(
             .width(widthDp)
             .height(56.dp)
             .clip(shape)
-            .background(Bc.c.clipBg)
+            .background(pal.clipBg)
             .border(
                 if (selected) 2.dp else 0.5.dp,
-                if (selected) Accent else Bc.c.stroke,
+                if (selected) Accent else pal.stroke,
                 shape
             )
             .clickable(onClick = onClick)
@@ -264,20 +342,22 @@ private fun ClipBlock(
                         contentDescription = null,
                         contentScale = ContentScale.Crop,
                         modifier = Modifier
-                            .width(frameWidthDp.dp)
+                            .width(frameWidth)
                             .fillMaxHeight()
                     )
                 } else {
-                    Spacer(Modifier.width(frameWidthDp.dp))
+                    Spacer(Modifier.width(frameWidth))
                 }
             }
         }
 
-        // Duration label: thumbnails na bhi aayein to clip hamesha pehchaana jaye
+        // Duration + speed label
+        val speedTxt = if (clip.speed != 1f) "  " + String.format(Locale.US, "%.2fx", clip.speed) else ""
         Text(
-            durationLabel(clip.lengthMs),
+            durationLabel(clip.lengthMs) + speedTxt,
             color = Color.White,
             fontSize = 10.sp,
+            maxLines = 1,
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .padding(4.dp)
@@ -291,32 +371,22 @@ private fun ClipBlock(
                 onDrag = { dx ->
                     val c = curClip
                     val dMs = (dx / pxPerMs).toLong()
-                    val lo = -c.trimStartMs
+                    val lo = -(c.trimStartMs / c.speed).toLong()
                     val hi = maxOf(c.lengthMs + pendingRight - MIN_CLIP_MS, lo)
                     pendingLeft = (pendingLeft + dMs).coerceIn(lo, hi)
                 },
-                onEnd = {
-                    if (pendingLeft != 0L || pendingRight != 0L) {
-                        val c = curClip
-                        onTrim(c.id, c.trimStartMs + pendingLeft, c.trimEndMs + pendingRight)
-                    }
-                }
+                onEnd = { commitTrim() }
             )
             TrimHandle(
                 modifier = Modifier.align(Alignment.CenterEnd),
                 onDrag = { dx ->
                     val c = curClip
                     val dMs = (dx / pxPerMs).toLong()
-                    val hi = c.durationMs - c.trimEndMs
+                    val hi = ((c.durationMs - c.trimEndMs) / c.speed).toLong()
                     val lo = minOf(-(c.lengthMs - pendingLeft - MIN_CLIP_MS), hi)
                     pendingRight = (pendingRight + dMs).coerceIn(lo, hi)
                 },
-                onEnd = {
-                    if (pendingLeft != 0L || pendingRight != 0L) {
-                        val c = curClip
-                        onTrim(c.id, c.trimStartMs + pendingLeft, c.trimEndMs + pendingRight)
-                    }
-                }
+                onEnd = { commitTrim() }
             )
         }
     }
@@ -357,7 +427,7 @@ private fun TrimHandle(modifier: Modifier, onDrag: (Float) -> Unit, onEnd: () ->
 
 private fun decodeFrame(r: MediaMetadataRetriever, clip: Clip, i: Int, count: Int): ImageBitmap? {
     return try {
-        val offset = ((i + 0.5) * clip.lengthMs / count).toLong()
+        val offset = ((i + 0.5) * clip.sourceLenMs / count).toLong()
         val t = (clip.trimStartMs + offset).coerceIn(0L, maxOf(clip.trimEndMs - 1, 0L))
         val b = r.getFrameAtTime(t * 1000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
         if (b == null) {

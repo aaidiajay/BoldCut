@@ -9,7 +9,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -23,7 +22,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.Button
@@ -42,6 +40,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -67,18 +66,18 @@ import kotlin.math.roundToInt
 private fun fmt(ms: Long): String =
     String.format(Locale.US, "%02d:%02d", ms / 60000, (ms / 1000) % 60)
 
-// Reference jaisa bottom tool tabs. step = kis step me kaam karega (null = abhi chal raha / baad me)
+// Bottom tool tabs. step = kis step me kaam karega
 private enum class ToolTab(val label: String, val icon: ImageVector, val step: Int?) {
     Edit("Edit", Icons.Outlined.ContentCut, null),
     Media("Media", Icons.Outlined.PermMedia, null),
-    Audio("Audio", Icons.Outlined.MusicNote, 8),
-    Text("Text", Icons.Outlined.TextFields, 8),
-    Shape("Shape", Icons.Outlined.Category, 11),
-    Element("Element", Icons.Outlined.EmojiEmotions, 11),
+    Audio("Audio", Icons.Outlined.MusicNote, 11),
+    Text("Text", Icons.Outlined.TextFields, 11),
+    Shape("Shape", Icons.Outlined.Category, 9),
+    Element("Element", Icons.Outlined.EmojiEmotions, 9),
     Template("Template", Icons.Outlined.ViewQuilt, 14),
-    Draw("Freehand", Icons.Outlined.Gesture, 11),
-    Vector("Vector", Icons.Outlined.Create, 11),
-    Effects("Effects", Icons.Outlined.AutoAwesome, 10)
+    Draw("Freehand", Icons.Outlined.Gesture, 9),
+    Vector("Vector", Icons.Outlined.Create, 9),
+    Effects("Effects", Icons.Outlined.AutoAwesome, 12)
 }
 
 @Composable
@@ -88,9 +87,11 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
     val density = LocalDensity.current
     val scope = rememberCoroutineScope()
     val scrollState = rememberScrollState()
-    val pxPerMs = with(density) { DP_PER_SEC.dp.toPx() } / 1000f
     val store = remember { ProjectStore(ctx.applicationContext) }
     val runner = remember { ExportRunner(ctx.applicationContext, scope) }
+
+    var dpPerSec by remember { mutableStateOf(BASE_DP_PER_SEC) }
+    val pxPerMs = with(density) { dpPerSec.dp.toPx() } / 1000f
 
     var name by remember { mutableStateOf("Project") }
     var loaded by remember { mutableStateOf(false) }
@@ -103,7 +104,9 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
     var redoStack by remember { mutableStateOf(emptyList<EditState>()) }
     var tab by remember { mutableStateOf(ToolTab.Edit) }
     var showExport by remember { mutableStateOf(false) }
-    var exportSrc by remember { mutableStateOf(1920 to 1080) }
+    var showSpeed by remember { mutableStateOf(false) }
+    var gridMode by remember { mutableStateOf(GridMode.OFF) }
+    var videoSize by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var exportSettings by remember { mutableStateOf(ExportSettings()) }
     val thumbKey = remember { arrayOf<String?>(null) }
 
@@ -115,6 +118,10 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
 
     fun toast(msg: String) = Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
     fun totalMs(): Long = clips.sumOf { it.lengthMs }
+
+    fun zoomBy(f: Float) {
+        dpPerSec = (dpPerSec * f).coerceIn(8f, 400f)
+    }
 
     // ---- Project save ----
     fun persist(cl: List<Clip>, mk: List<Marker>, n: String) {
@@ -145,9 +152,10 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
         }
     }
 
-    BackHandler(onBack = { leave() })
+    BackHandler(onBack = {
+        if (selectedId != null) selectedId = null else leave()
+    })
 
-    // Project load karo
     LaunchedEffect(projectId) {
         val p = withContext(Dispatchers.IO) { store.load(projectId) }
         if (p != null) {
@@ -164,7 +172,6 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
         loaded = true
     }
 
-    // Auto-save
     LaunchedEffect(loaded) {
         if (!loaded) return@LaunchedEffect
         snapshotFlow { Triple(clips, markers, name) }
@@ -173,6 +180,12 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
                 delay(600)
                 withContext(Dispatchers.IO) { persist(cl, mk, n) }
             }
+    }
+
+    // Preview grid ke liye pehle clip ka size
+    LaunchedEffect(clips.firstOrNull()?.id) {
+        val f = clips.firstOrNull()
+        videoSize = if (f == null) null else withContext(Dispatchers.IO) { readVideoSize(ctx, f.uri) }
     }
 
     // ---- Undo / Redo ----
@@ -201,12 +214,14 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
         selectedId = null
     }
 
-    // ---- Player helpers ----
+    // ---- Player helpers (speed ke saath) ----
+    // rem = clip ke andar timeline ms; player ko source ms chahiye (rem * speed)
     fun seekGlobal(ms: Long) {
         var rem = ms.coerceAtLeast(0L)
         for ((i, cl) in clips.withIndex()) {
             if (rem < cl.lengthMs || i == clips.lastIndex) {
-                player.seekTo(i, rem.coerceAtMost((cl.lengthMs - 1).coerceAtLeast(0L)))
+                val src = (rem * cl.speed).toLong()
+                player.seekTo(i, src.coerceAtMost((cl.sourceLenMs - 1).coerceAtLeast(0L)))
                 return
             }
             rem -= cl.lengthMs
@@ -252,19 +267,24 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
         }
     }
 
+    // Playing ke time global position track karo aur clip ki speed lagao
     LaunchedEffect(Unit) {
         while (true) {
             delay(33)
             if (player.isPlaying) {
                 val idx = player.currentMediaItemIndex.coerceAtMost(clips.size)
+                val cur = clips.getOrNull(idx)
+                if (cur != null && abs(player.playbackParameters.speed - cur.speed) > 0.001f) {
+                    player.setPlaybackSpeed(cur.speed)
+                }
                 var base = 0L
                 for (i in 0 until idx) base += clips[i].lengthMs
-                posMs = base + player.currentPosition.coerceAtLeast(0L)
+                val speed = cur?.speed ?: 1f
+                posMs = base + (player.currentPosition.coerceAtLeast(0L) / speed).toLong()
             }
         }
     }
 
-    // Export progress poll
     val exporting = runner.state is ExportState.Running
     LaunchedEffect(exporting) {
         while (runner.state is ExportState.Running) {
@@ -301,6 +321,7 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
                 seekGlobal(0L)
                 scope.launch { scrollState.scrollTo(0) }
             }
+            clips.getOrNull(player.currentMediaItemIndex)?.let { player.setPlaybackSpeed(it.speed) }
             player.play()
         }
     }
@@ -315,7 +336,7 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
                     toast("Playhead ko clip ke beech me lao")
                     return
                 }
-                val splitAt = cl.trimStartMs + off
+                val splitAt = cl.trimStartMs + (off * cl.speed).toLong()
                 val list = clips.toMutableList()
                 list[i] = cl.copy(trimEndMs = splitAt)
                 list.add(i + 1, cl.copy(id = Ids.next(), trimStartMs = splitAt))
@@ -335,6 +356,23 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
         }
         commit(newClips = clips.filterNot { it.id == id })
         selectedId = null
+    }
+
+    fun duplicateSelected() {
+        val id = selectedId ?: return
+        val i = clips.indexOfFirst { it.id == id }
+        if (i < 0) return
+        val list = clips.toMutableList()
+        val copy = clips[i].copy(id = Ids.next())
+        list.add(i + 1, copy)
+        commit(newClips = list)
+        selectedId = copy.id
+    }
+
+    fun applySpeed(s: Float) {
+        val id = selectedId ?: return
+        commit(newClips = clips.map { if (it.id == id) it.copy(speed = s) else it })
+        showSpeed = false
     }
 
     fun trimClip(id: Long, newStart: Long, newEnd: Long) {
@@ -372,7 +410,6 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
         jumpTo(t.timeMs)
     }
 
-    // Pichle/agle clip ki seema (boundary) pe jao
     fun skipClip(next: Boolean) {
         if (clips.isEmpty()) return
         val b = mutableListOf(0L)
@@ -391,12 +428,10 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
             return
         }
         player.pause()
-        scope.launch {
-            val sz = withContext(Dispatchers.IO) { readVideoSize(ctx, clips.first().uri) } ?: (1920 to 1080)
-            exportSrc = sz
-            showExport = true
-        }
+        showExport = true
     }
+
+    val selClip = clips.firstOrNull { it.id == selectedId }
 
     Column(Modifier.fillMaxSize().background(c.bg)) {
         // Top bar
@@ -428,7 +463,7 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
             Spacer(Modifier.width(8.dp))
         }
 
-        // Preview
+        // Preview + grid
         Box(
             Modifier.weight(1f).fillMaxWidth().background(c.previewBg),
             contentAlignment = Alignment.Center
@@ -442,8 +477,21 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
                     }
                 }
             )
+            val vs = videoSize
+            val aspect = if (vs != null) vs.first.toFloat() / vs.second.toFloat() else 16f / 9f
+            GridOverlay(gridMode, aspect, Modifier.fillMaxSize())
             if (clips.isEmpty()) {
                 Text("Preview yahan dikhega", color = c.muted, fontSize = 14.sp)
+            }
+            Box(Modifier.align(Alignment.TopEnd).padding(6.dp)) {
+                IconBtn(
+                    Icons.Outlined.GridOn,
+                    onClick = {
+                        gridMode = GridMode.values()[(gridMode.ordinal + 1) % GridMode.values().size]
+                        toast(gridMode.label)
+                    },
+                    tint = if (gridMode == GridMode.OFF) Color(0xCCFFFFFF) else c.accent
+                )
             }
         }
 
@@ -485,6 +533,8 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
             posMs = posMs,
             playing = playing,
             scrollState = scrollState,
+            dpPerSec = dpPerSec,
+            onZoom = { zoomBy(it) },
             onSelect = { selectedId = if (selectedId == it) null else it },
             onSeek = { ms ->
                 posMs = ms
@@ -495,75 +545,97 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
             onMarkerClick = { jumpTo(it.timeMs) }
         )
 
-        // Tool tabs + panel
-        Column(Modifier.fillMaxWidth().background(c.surface)) {
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
-                ToolTab.values().forEach { t ->
-                    val sel = t == tab
-                    Column(
-                        Modifier
-                            .width(72.dp)
-                            .clickable { tab = t }
-                            .padding(top = 8.dp, bottom = 4.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        BcIcon(t.icon, tint = if (sel) c.accent else c.muted, size = 24.dp)
-                        Spacer(Modifier.height(2.dp))
-                        Text(
-                            t.label,
-                            fontSize = 11.sp,
-                            maxLines = 1,
-                            color = if (sel) c.accent else c.muted,
-                            fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Normal
-                        )
+        // Clip select ho to uska toolbar, warna tool tabs
+        if (selClip != null) {
+            ClipBar(
+                clip = selClip,
+                onDone = { selectedId = null },
+                onSpeed = { showSpeed = true },
+                onSplit = { splitAtPlayhead() },
+                onDuplicate = { duplicateSelected() },
+                onDelete = { deleteSelected() },
+                onSoon = { toast(it) }
+            )
+        } else {
+            Column(Modifier.fillMaxWidth().background(c.surface)) {
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                    ToolTab.values().forEach { t ->
+                        val sel = t == tab
+                        Column(
+                            Modifier
+                                .width(72.dp)
+                                .clickable { tab = t }
+                                .padding(top = 8.dp, bottom = 4.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            BcIcon(t.icon, tint = if (sel) c.accent else c.muted, size = 24.dp)
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                t.label,
+                                fontSize = 11.sp,
+                                maxLines = 1,
+                                color = if (sel) c.accent else c.muted,
+                                fontWeight = if (sel) FontWeight.SemiBold else FontWeight.Normal
+                            )
+                        }
                     }
                 }
-            }
-            Box(
-                Modifier.fillMaxWidth().height(80.dp).background(c.bg.copy(alpha = 0.5f)),
-                contentAlignment = Alignment.CenterStart
-            ) {
-                when (tab) {
-                    ToolTab.Edit -> Row(Modifier.horizontalScroll(rememberScrollState())) {
-                        Action(Icons.Outlined.VerticalSplit, "Split") { splitAtPlayhead() }
-                        Action(Icons.Outlined.Delete, "Delete") { deleteSelected() }
-                        Action(Icons.Outlined.BookmarkBorder, "Marker") { toggleMarker() }
-                        Action(Icons.Outlined.ChevronLeft, "Prev marker") { jumpMarker(false) }
-                        Action(Icons.Outlined.ChevronRight, "Next marker") { jumpMarker(true) }
-                    }
-                    ToolTab.Media -> Row(Modifier.horizontalScroll(rememberScrollState())) {
-                        Action(Icons.Outlined.Videocam, "Add video") { addVideo() }
-                        Action(Icons.Outlined.Image, "Add photo") { toast("Photo support Step 7 me") }
-                        Action(Icons.Outlined.Mic, "Record") { toast("Record aage ke Step me") }
-                    }
-                    else -> Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        BcIcon(tab.icon, tint = c.muted, size = 26.dp)
-                        Spacer(Modifier.width(12.dp))
-                        Text(
-                            "${tab.label} tools Step ${tab.step} me aayenge",
-                            color = c.muted,
-                            fontSize = 13.sp
-                        )
+                Box(
+                    Modifier.fillMaxWidth().height(80.dp).background(c.bg.copy(alpha = 0.5f)),
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    when (tab) {
+                        ToolTab.Edit -> Row(Modifier.horizontalScroll(rememberScrollState())) {
+                            ClipAction(Icons.Outlined.VerticalSplit, "Split") { splitAtPlayhead() }
+                            ClipAction(Icons.Outlined.Delete, "Delete") { deleteSelected() }
+                            ClipAction(Icons.Outlined.BookmarkBorder, "Marker") { toggleMarker() }
+                            ClipAction(Icons.Outlined.ChevronLeft, "Prev marker") { jumpMarker(false) }
+                            ClipAction(Icons.Outlined.ChevronRight, "Next marker") { jumpMarker(true) }
+                        }
+                        ToolTab.Media -> Row(Modifier.horizontalScroll(rememberScrollState())) {
+                            ClipAction(Icons.Outlined.Videocam, "Add video") { addVideo() }
+                            ClipAction(Icons.Outlined.Image, "Add photo") { toast("Photo support Step 7 me") }
+                            ClipAction(Icons.Outlined.Mic, "Record") { toast("Record aage ke Step me") }
+                        }
+                        else -> Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            BcIcon(tab.icon, tint = c.muted, size = 26.dp)
+                            Spacer(Modifier.width(12.dp))
+                            Text(
+                                "${tab.label} tools Step ${tab.step} me aayenge",
+                                color = c.muted,
+                                fontSize = 13.sp
+                            )
+                        }
                     }
                 }
             }
         }
     }
 
+    // ---- Speed sheet ----
+    if (showSpeed && selClip != null) {
+        SpeedSheet(
+            initial = selClip.speed,
+            onApply = { applySpeed(it) },
+            onDismiss = { showSpeed = false }
+        )
+    }
+
     // ---- Export dialogs ----
     if (showExport) {
+        val src = videoSize ?: (1920 to 1080)
         ExportSheet(
             totalMs = totalMs(),
-            srcW = exportSrc.first,
-            srcH = exportSrc.second,
+            srcW = src.first,
+            srcH = src.second,
             initial = exportSettings,
             onStart = { s ->
                 exportSettings = s
                 showExport = false
-                val (cw, ch) = canvasSize(exportSrc.first, exportSrc.second, s.shortSide)
+                val (cw, ch) = canvasSize(src.first, src.second, s.shortSide)
                 runner.start(clips, s, cw, ch)
             },
             onDismiss = { showExport = false }
@@ -587,21 +659,5 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
         )
         is ExportState.Failed -> ExportFailedDialog(st.message, onClose = { runner.reset() })
         else -> {}
-    }
-}
-
-@Composable
-private fun Action(icon: ImageVector, label: String, onClick: () -> Unit) {
-    val c = Bc.c
-    Column(
-        Modifier
-            .width(80.dp)
-            .clickable(onClick = onClick)
-            .padding(vertical = 10.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        BcIcon(icon, tint = c.text, size = 26.dp)
-        Spacer(Modifier.height(4.dp))
-        Text(label, fontSize = 11.sp, color = c.muted, maxLines = 1)
     }
 }

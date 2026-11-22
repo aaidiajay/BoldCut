@@ -43,10 +43,13 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.media3.common.Effect
+import androidx.media3.common.audio.AudioProcessor
+import androidx.media3.common.audio.SonicAudioProcessor
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.effect.FrameDropEffect
 import androidx.media3.effect.Presentation
+import androidx.media3.effect.SpeedChangeEffect
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.DefaultEncoderFactory
 import androidx.media3.transformer.EditedMediaItem
@@ -147,10 +150,18 @@ class ExportRunner(private val ctx: Context, private val scope: CoroutineScope) 
                 )
                 .build()
             val vfx = mutableListOf<Effect>()
+            val afx = mutableListOf<AudioProcessor>()
+            if (c.speed != 1f) {
+                val sonic = SonicAudioProcessor()
+                sonic.setSpeed(c.speed)
+                sonic.setPitch(1f)
+                afx.add(sonic)
+                vfx.add(SpeedChangeEffect(c.speed))
+            }
             vfx.add(Presentation.createForWidthAndHeight(w, h, Presentation.LAYOUT_SCALE_TO_FIT))
             vfx.add(FrameDropEffect.createDefaultFrameDropEffect(s.fps.toFloat()))
             EditedMediaItem.Builder(mi)
-                .setEffects(Effects(emptyList(), vfx))
+                .setEffects(Effects(afx, vfx))
                 .build()
         }
         val composition = Composition.Builder(EditedMediaItemSequence(items)).build()
@@ -252,7 +263,7 @@ class ExportRunner(private val ctx: Context, private val scope: CoroutineScope) 
 // ---------------- UI ----------------
 
 @Composable
-private fun OptChip(text: String, selected: Boolean, onClick: () -> Unit) {
+internal fun OptChip(text: String, selected: Boolean, onClick: () -> Unit) {
     val c = Bc.c
     Box(
         Modifier
@@ -271,7 +282,7 @@ private fun OptChip(text: String, selected: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun Label(text: String) {
+internal fun Label(text: String) {
     Text(
         text,
         color = Bc.c.muted,
