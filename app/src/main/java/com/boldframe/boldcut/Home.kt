@@ -7,6 +7,7 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -27,10 +28,13 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
@@ -53,6 +57,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -67,12 +72,6 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-private val HBg = Color(0xFF0B0B10)
-private val HPanel = Color(0xFF17171F)
-private val HText = Color.White
-private val HMuted = Color(0xFF9A9FA8)
-private val HAccent = Color(0xFFFFC107)
-
 private fun fmtDur(ms: Long): String =
     String.format(Locale.US, "%02d:%02d", ms / 60000, (ms / 1000) % 60)
 
@@ -83,7 +82,8 @@ private fun fmtDate(ms: Long): String =
     SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault()).format(Date(ms))
 
 @Composable
-fun HomeScreen(refreshTick: Int, onOpen: (String) -> Unit) {
+fun HomeScreen(refreshTick: Int, onOpen: (String) -> Unit, onOpenSettings: () -> Unit) {
+    val c = Bc.c
     val ctx = LocalContext.current
     val store = remember { ProjectStore(ctx.applicationContext) }
     val scope = rememberCoroutineScope()
@@ -129,7 +129,7 @@ fun HomeScreen(refreshTick: Int, onOpen: (String) -> Unit) {
         picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly))
     }
 
-    Column(Modifier.fillMaxSize().background(HBg)) {
+    Column(Modifier.fillMaxSize().background(c.bg)) {
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when (tab) {
                 0 -> EditTab(
@@ -139,7 +139,8 @@ fun HomeScreen(refreshTick: Int, onOpen: (String) -> Unit) {
                     onEditPhoto = { soon("Edit photo") },
                     onSeeAll = { tab = 2 },
                     onOpen = onOpen,
-                    onSoon = { soon(it) }
+                    onSoon = { soon(it) },
+                    onSettings = onOpenSettings
                 )
                 2 -> ProjectsTab(
                     store = store,
@@ -154,9 +155,9 @@ fun HomeScreen(refreshTick: Int, onOpen: (String) -> Unit) {
                     },
                     onDelete = { deleteTarget = it }
                 )
-                1 -> ComingSoonTab("📑", "Templates")
-                3 -> ComingSoonTab("🔔", "Inbox")
-                else -> ComingSoonTab("👤", "Me")
+                1 -> ComingSoonTab(Icons.Outlined.ViewQuilt, "Templates")
+                3 -> ComingSoonTab(Icons.Outlined.Notifications, "Inbox")
+                else -> ComingSoonTab(Icons.Outlined.Person, "Me")
             }
 
             if (busy) {
@@ -168,26 +169,34 @@ fun HomeScreen(refreshTick: Int, onOpen: (String) -> Unit) {
                     contentAlignment = Alignment.Center
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        CircularProgressIndicator(color = HAccent)
+                        CircularProgressIndicator(color = c.accent)
                         Spacer(Modifier.height(12.dp))
-                        Text("Video load ho rahi hai...", color = HText, fontSize = 14.sp)
+                        Text("Video load ho rahi hai...", color = Color.White, fontSize = 14.sp)
                     }
                 }
             }
         }
 
-        NavigationBar(containerColor = HPanel) {
-            val items = listOf("✂️" to "Edit", "📑" to "Templates", "📁" to "Projects", "🔔" to "Inbox", "👤" to "Me")
+        NavigationBar(containerColor = c.surface, tonalElevation = 0.dp) {
+            val items = listOf(
+                Icons.Outlined.ContentCut to "Edit",
+                Icons.Outlined.ViewQuilt to "Templates",
+                Icons.Outlined.Folder to "Projects",
+                Icons.Outlined.Notifications to "Inbox",
+                Icons.Outlined.Person to "Me"
+            )
             items.forEachIndexed { i, (icon, label) ->
                 NavigationBarItem(
                     selected = tab == i,
                     onClick = { tab = i },
-                    icon = { Text(icon, fontSize = 20.sp) },
-                    label = { Text(label, fontSize = 11.sp) },
+                    icon = { Icon(icon, contentDescription = null) },
+                    label = { Text(label, fontSize = 10.sp, maxLines = 1, softWrap = false) },
                     colors = NavigationBarItemDefaults.colors(
-                        selectedTextColor = HAccent,
-                        unselectedTextColor = HMuted,
-                        indicatorColor = Color(0x33FFC107)
+                        selectedIconColor = c.accent,
+                        selectedTextColor = c.accent,
+                        unselectedIconColor = c.muted,
+                        unselectedTextColor = c.muted,
+                        indicatorColor = c.accent.copy(alpha = 0.16f)
                     )
                 )
             }
@@ -249,25 +258,27 @@ private fun EditTab(
     onEditPhoto: () -> Unit,
     onSeeAll: () -> Unit,
     onOpen: (String) -> Unit,
-    onSoon: (String) -> Unit
+    onSoon: (String) -> Unit,
+    onSettings: () -> Unit
 ) {
+    val c = Bc.c
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-        // Header + main actions
         Box(
             Modifier
                 .fillMaxWidth()
-                .background(
-                    Brush.verticalGradient(
-                        listOf(Color(0xFF3B2A7A), Color(0xFF1A1236), HBg)
-                    )
-                )
+                .background(Brush.verticalGradient(listOf(c.headerTop, c.headerMid, c.bg)))
                 .padding(horizontal = 16.dp)
-                .padding(top = 28.dp, bottom = 16.dp)
+                .padding(top = 12.dp, bottom = 16.dp)
         ) {
             Column {
-                Text("BoldCut", color = HText, fontSize = 30.sp, fontWeight = FontWeight.Bold)
-                Text("Shoot. Edit. Create.", color = Color(0xFFC9C2E8), fontSize = 14.sp)
-                Spacer(Modifier.height(28.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("BoldCut", color = c.text, fontSize = 30.sp, fontWeight = FontWeight.Bold)
+                        Text("Shoot. Edit. Create.", color = c.muted, fontSize = 14.sp)
+                    }
+                    IconBtn(Icons.Outlined.Settings, onSettings)
+                }
+                Spacer(Modifier.height(24.dp))
                 Row(
                     Modifier.fillMaxWidth().height(150.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -289,7 +300,7 @@ private fun EditTab(
                         Box(
                             Modifier.size(48.dp).clip(RoundedCornerShape(16.dp)).background(Color.Black),
                             contentAlignment = Alignment.Center
-                        ) { Text("+", color = Color.White, fontSize = 28.sp) }
+                        ) { BcIcon(Icons.Outlined.Add, tint = Color.White, size = 28.dp) }
                         Spacer(Modifier.height(10.dp))
                         Text("New video", color = Color.Black, fontSize = 17.sp, fontWeight = FontWeight.Bold)
                     }
@@ -298,15 +309,15 @@ private fun EditTab(
                             .weight(1f)
                             .fillMaxHeight()
                             .clip(RoundedCornerShape(24.dp))
-                            .background(Color(0x22FFFFFF))
+                            .background(c.surface2)
                             .clickable(onClick = onEditPhoto),
                         verticalArrangement = Arrangement.Center,
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Text("🖼", fontSize = 30.sp)
+                        BcIcon(Icons.Outlined.Image, tint = c.text, size = 30.dp)
                         Spacer(Modifier.height(10.dp))
-                        Text("Edit photo", color = HText, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                        Text("jald aayega", color = HMuted, fontSize = 11.sp)
+                        Text("Edit photo", color = c.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                        Text("jald aayega", color = c.muted, fontSize = 11.sp)
                     }
                 }
             }
@@ -319,12 +330,12 @@ private fun EditTab(
         ) {
             Text(
                 "Recent projects",
-                color = HText,
+                color = c.text,
                 fontSize = 17.sp,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.weight(1f)
             )
-            Text("See all ›", color = HAccent, fontSize = 13.sp, modifier = Modifier.clickable(onClick = onSeeAll))
+            Text("See all", color = c.accent, fontSize = 13.sp, modifier = Modifier.clickable(onClick = onSeeAll))
         }
 
         if (projects.isEmpty()) {
@@ -333,13 +344,13 @@ private fun EditTab(
                     .padding(horizontal = 16.dp)
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(18.dp))
-                    .background(HPanel)
+                    .background(c.surface)
                     .padding(20.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     "Abhi koi project nahi. \"New video\" dabake shuru karo.",
-                    color = HMuted,
+                    color = c.muted,
                     fontSize = 13.sp,
                     textAlign = TextAlign.Center
                 )
@@ -349,9 +360,9 @@ private fun EditTab(
                 contentPadding = PaddingValues(horizontal = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                items(projects.take(10), key = { it.id }) { p ->
-                    Column(Modifier.width(120.dp).clickable { onOpen(p.id) }) {
-                        Box(Modifier.size(120.dp)) {
+                items(projects.take(8), key = { it.id }) { p ->
+                    Column(Modifier.width(110.dp).clickable { onOpen(p.id) }) {
+                        Box(Modifier.size(110.dp)) {
                             ProjectThumb(store, p, Modifier.fillMaxSize().clip(RoundedCornerShape(18.dp)))
                             Text(
                                 fmtDur(p.durationMs),
@@ -367,12 +378,22 @@ private fun EditTab(
                         Spacer(Modifier.height(6.dp))
                         Text(
                             p.name,
-                            color = HText,
+                            color = c.text,
                             fontSize = 12.sp,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
                     }
+                }
+                item {
+                    Box(
+                        Modifier
+                            .size(110.dp)
+                            .clip(RoundedCornerShape(18.dp))
+                            .background(c.surface2)
+                            .clickable(onClick = onSeeAll),
+                        contentAlignment = Alignment.Center
+                    ) { BcIcon(Icons.Outlined.ChevronRight, tint = c.text, size = 32.dp) }
                 }
             }
         }
@@ -380,22 +401,22 @@ private fun EditTab(
         // Tools
         Text(
             "Tools",
-            color = HText,
+            color = c.text,
             fontSize = 17.sp,
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.padding(start = 16.dp, top = 24.dp, bottom = 12.dp)
         )
-        val tools = listOf(
-            "⚡" to "AutoCut",
-            "🪄" to "Retouch",
-            "🤖" to "AI generator",
-            "🖼" to "Photo tools",
-            "📖" to "AI story maker",
-            "🎥" to "Shoot and record"
+        val tools: List<Pair<ImageVector, String>> = listOf(
+            Icons.Outlined.Bolt to "AutoCut",
+            Icons.Outlined.AutoFixHigh to "Retouch",
+            Icons.Outlined.AutoAwesome to "AI generator",
+            Icons.Outlined.PhotoLibrary to "Photo tools",
+            Icons.Outlined.MenuBook to "AI story maker",
+            Icons.Outlined.Videocam to "Shoot and record"
         )
         Column(
             Modifier.padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             tools.chunked(3).forEach { row ->
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -403,17 +424,23 @@ private fun EditTab(
                         Column(
                             Modifier
                                 .weight(1f)
-                                .clip(RoundedCornerShape(20.dp))
-                                .background(HPanel)
+                                .clip(RoundedCornerShape(16.dp))
                                 .clickable { onSoon(label) }
-                                .padding(vertical = 16.dp, horizontal = 8.dp),
+                                .padding(vertical = 6.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            Text(icon, fontSize = 28.sp)
+                            Box(
+                                Modifier
+                                    .size(58.dp)
+                                    .clip(RoundedCornerShape(18.dp))
+                                    .background(c.surface)
+                                    .border(1.dp, c.stroke, RoundedCornerShape(18.dp)),
+                                contentAlignment = Alignment.Center
+                            ) { BcIcon(icon, tint = c.text, size = 26.dp) }
                             Spacer(Modifier.height(8.dp))
                             Text(
                                 label,
-                                color = HText,
+                                color = c.text,
                                 fontSize = 12.sp,
                                 textAlign = TextAlign.Center,
                                 maxLines = 2,
@@ -437,17 +464,18 @@ private fun ProjectsTab(
     onDuplicate: (ProjectMeta) -> Unit,
     onDelete: (ProjectMeta) -> Unit
 ) {
+    val c = Bc.c
     Column(Modifier.fillMaxSize()) {
         Text(
             "Projects",
-            color = HText,
+            color = c.text,
             fontSize = 24.sp,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(start = 16.dp, top = 24.dp, bottom = 12.dp)
         )
         if (projects.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("Abhi koi project nahi", color = HMuted, fontSize = 14.sp)
+                Text("Abhi koi project nahi", color = c.muted, fontSize = 14.sp)
             }
         } else {
             LazyColumn(
@@ -478,12 +506,13 @@ private fun ProjectRow(
     onDuplicate: () -> Unit,
     onDelete: () -> Unit
 ) {
+    val c = Bc.c
     var menu by remember { mutableStateOf(false) }
     Row(
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(18.dp))
-            .background(HPanel)
+            .background(c.surface)
             .clickable(onClick = onClick)
             .padding(10.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -493,23 +522,18 @@ private fun ProjectRow(
         Column(Modifier.weight(1f)) {
             Text(
                 p.name,
-                color = HText,
+                color = c.text,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
             Spacer(Modifier.height(2.dp))
-            Text("${fmtDur(p.durationMs)} · ${p.clipCount} clip", color = HMuted, fontSize = 12.sp)
-            Text(fmtDate(p.modifiedAt), color = HMuted, fontSize = 11.sp)
+            Text("${fmtDur(p.durationMs)} · ${p.clipCount} clip", color = c.muted, fontSize = 12.sp)
+            Text(fmtDate(p.modifiedAt), color = c.muted, fontSize = 11.sp)
         }
         Box {
-            Text(
-                "⋮",
-                color = HText,
-                fontSize = 22.sp,
-                modifier = Modifier.clickable { menu = true }.padding(horizontal = 12.dp, vertical = 8.dp)
-            )
+            IconBtn(Icons.Outlined.MoreVert, onClick = { menu = true })
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                 DropdownMenuItem(text = { Text("Rename") }, onClick = { menu = false; onRename() })
                 DropdownMenuItem(text = { Text("Duplicate") }, onClick = { menu = false; onDuplicate() })
@@ -521,10 +545,11 @@ private fun ProjectRow(
 
 @Composable
 private fun ProjectThumb(store: ProjectStore, meta: ProjectMeta, modifier: Modifier) {
+    val c = Bc.c
     val bmp by produceState<ImageBitmap?>(null, meta.id, meta.modifiedAt) {
         value = withContext(Dispatchers.IO) { store.loadThumb(meta.id)?.asImageBitmap() }
     }
-    Box(modifier.background(Color(0xFF23232C)), contentAlignment = Alignment.Center) {
+    Box(modifier.background(c.surface2), contentAlignment = Alignment.Center) {
         val b = bmp
         if (b != null) {
             Image(
@@ -534,19 +559,20 @@ private fun ProjectThumb(store: ProjectStore, meta: ProjectMeta, modifier: Modif
                 modifier = Modifier.fillMaxSize()
             )
         } else {
-            Text("🎬", fontSize = 26.sp)
+            BcIcon(Icons.Outlined.Videocam, tint = c.muted, size = 28.dp)
         }
     }
 }
 
 @Composable
-private fun ComingSoonTab(icon: String, title: String) {
+private fun ComingSoonTab(icon: ImageVector, title: String) {
+    val c = Bc.c
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(icon, fontSize = 40.sp)
+            BcIcon(icon, tint = c.muted, size = 44.dp)
             Spacer(Modifier.height(8.dp))
-            Text(title, color = HText, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-            Text("jald aayega", color = HMuted, fontSize = 13.sp)
+            Text(title, color = c.text, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+            Text("jald aayega", color = c.muted, fontSize = 13.sp)
         }
     }
 }

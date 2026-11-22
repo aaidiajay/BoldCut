@@ -11,8 +11,8 @@ android {
         applicationId = "com.boldframe.boldcut"
         minSdk = 26
         targetSdk = 34
-        versionCode = 5
-        versionName = "0.4"
+        versionCode = 6
+        versionName = "0.5"
     }
 
     buildTypes {
@@ -44,4 +44,8 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.media3:media3-exoplayer:1.3.1")
     implementation("androidx.media3:media3-ui:1.3.1")
+    implementation("androidx.media3:media3-common:1.3.1")
+    implementation("androidx.media3:media3-effect:1.3.1")
+    implementation("androidx.media3:media3-transformer:1.3.1")
+    implementation("androidx.compose.material:material-icons-extended")
 }

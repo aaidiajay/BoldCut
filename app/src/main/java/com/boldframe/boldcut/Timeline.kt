@@ -104,7 +104,7 @@ fun Timeline(
         Modifier
             .fillMaxWidth()
             .height(104.dp)
-            .background(Color(0xFF121214))
+            .background(Bc.c.timelineBg)
     ) {
         val half = maxWidth / 2
         Box(Modifier.fillMaxSize()) {
@@ -113,7 +113,7 @@ fun Timeline(
                 Column {
                     val totalDp = with(density) { (totalMs * pxPerMs).toDp() }
                     Box(Modifier.width(totalDp).height(22.dp)) {
-                        Ruler(totalMs, Modifier.fillMaxSize())
+                        Ruler(totalMs, Modifier.fillMaxSize(), Bc.c.tick)
                         markers.filter { it.timeMs <= totalMs }.forEach { m ->
                             Box(
                                 Modifier
@@ -150,7 +150,7 @@ fun Timeline(
             if (clips.isEmpty()) {
                 Text(
                     "Neeche \"Add\" dabake video chuno",
-                    color = Color(0xFF7C8088),
+                    color = Bc.c.muted,
                     fontSize = 13.sp,
                     modifier = Modifier.align(Alignment.Center)
                 )
@@ -162,14 +162,14 @@ fun Timeline(
                     .align(Alignment.TopCenter)
                     .width(2.dp)
                     .fillMaxHeight()
-                    .background(Color.White)
+                    .background(Bc.c.text)
             )
         }
     }
 }
 
 @Composable
-private fun Ruler(totalMs: Long, modifier: Modifier) {
+private fun Ruler(totalMs: Long, modifier: Modifier, tick: Color) {
     Canvas(modifier) {
         val secs = (totalMs / 1000).toInt()
         val pxSec = DP_PER_SEC.dp.toPx()
@@ -177,7 +177,7 @@ private fun Ruler(totalMs: Long, modifier: Modifier) {
             val x = s * pxSec
             val h = if (s % 5 == 0) size.height * 0.7f else size.height * 0.35f
             drawLine(
-                Color(0xFF6B6F76),
+                tick,
                 Offset(x, size.height - h),
                 Offset(x, size.height),
                 1.dp.toPx()
@@ -243,10 +243,10 @@ private fun ClipBlock(
             .width(widthDp)
             .height(56.dp)
             .clip(shape)
-            .background(Color(0xFF2A2A2E))
+            .background(Bc.c.clipBg)
             .border(
                 if (selected) 2.dp else 0.5.dp,
-                if (selected) Accent else Color(0xFF3A3A3F),
+                if (selected) Accent else Bc.c.stroke,
                 shape
             )
             .clickable(onClick = onClick)
