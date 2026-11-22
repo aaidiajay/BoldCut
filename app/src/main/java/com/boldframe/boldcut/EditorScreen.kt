@@ -1,7 +1,7 @@
 package com.boldframe.boldcut
 
-import android.media.MediaMetadataRetriever
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -41,6 +41,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -50,10 +51,11 @@ import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
-import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -65,13 +67,16 @@ private fun fmt(ms: Long): String =
     String.format(Locale.US, "%02d:%02d", ms / 60000, (ms / 1000) % 60)
 
 @Composable
-fun EditorScreen() {
+fun EditorScreen(projectId: String, onBack: () -> Unit) {
     val ctx = LocalContext.current
     val density = LocalDensity.current
     val scope = rememberCoroutineScope()
     val scrollState = rememberScrollState()
     val pxPerMs = with(density) { DP_PER_SEC.dp.toPx() } / 1000f
+    val store = remember { ProjectStore(ctx.applicationContext) }
 
+    var name by remember { mutableStateOf("Project") }
+    var loaded by remember { mutableStateOf(false) }
     var clips by remember { mutableStateOf(emptyList<Clip>()) }
     var markers by remember { mutableStateOf(emptyList<Marker>()) }
     var selectedId by remember { mutableStateOf<Long?>(null) }
@@ -79,7 +84,7 @@ fun EditorScreen() {
     var playing by remember { mutableStateOf(false) }
     var undoStack by remember { mutableStateOf(emptyList<EditState>()) }
     var redoStack by remember { mutableStateOf(emptyList<EditState>()) }
-    val idGen = remember { AtomicLong(1) }
+    val thumbKey = remember { arrayOf<String?>(null) }
 
     val player = remember {
         ExoPlayer.Builder(ctx).build().apply {
@@ -89,6 +94,65 @@ fun EditorScreen() {
 
     fun toast(msg: String) = Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
     fun totalMs(): Long = clips.sumOf { it.lengthMs }
+
+    // ---- Project save ----
+    fun persist(c: List<Clip>, m: List<Marker>, n: String) {
+        val old = store.load(projectId)
+        val now = System.currentTimeMillis()
+        store.save(SavedProject(projectId, n, old?.createdAt ?: now, now, c, m))
+        val first = c.firstOrNull()
+        if (first != null) {
+            val key = "${first.id}-${first.trimStartMs}"
+            if (key != thumbKey[0]) {
+                firstFrame(ctx, first)?.let {
+                    store.saveThumbnail(projectId, it)
+                    thumbKey[0] = key
+                }
+            }
+        }
+    }
+
+    fun leave() {
+        player.pause()
+        val c = clips
+        val m = markers
+        val n = name
+        val ok = loaded
+        scope.launch {
+            if (ok) withContext(Dispatchers.IO) { persist(c, m, n) }
+            onBack()
+        }
+    }
+
+    BackHandler(onBack = { leave() })
+
+    // Project load karo
+    LaunchedEffect(projectId) {
+        val p = withContext(Dispatchers.IO) { store.load(projectId) }
+        if (p != null) {
+            val (ok, missing) = withContext(Dispatchers.IO) {
+                p.clips.partition { isReadable(ctx, it.uri) }
+            }
+            name = p.name
+            markers = p.markers
+            clips = ok
+            if (missing.isNotEmpty()) {
+                toast("${missing.size} clip ka video gallery me nahi mila, hata diya")
+            }
+        }
+        loaded = true
+    }
+
+    // Auto-save: har edit ke thodi der baad
+    LaunchedEffect(loaded) {
+        if (!loaded) return@LaunchedEffect
+        snapshotFlow { Triple(clips, markers, name) }
+            .drop(1)
+            .collectLatest { (c, m, n) ->
+                delay(600)
+                withContext(Dispatchers.IO) { persist(c, m, n) }
+            }
+    }
 
     // ---- Undo / Redo ----
     fun commit(newClips: List<Clip> = clips, newMarkers: List<Marker> = markers) {
@@ -181,21 +245,7 @@ fun EditorScreen() {
     ) { uris ->
         if (uris.isNotEmpty()) {
             scope.launch {
-                val added = withContext(Dispatchers.IO) {
-                    uris.mapNotNull { u ->
-                        runCatching {
-                            val r = MediaMetadataRetriever()
-                            try {
-                                r.setDataSource(ctx, u)
-                                val d = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-                                    ?.toLongOrNull() ?: 0L
-                                if (d > 0) Clip(idGen.getAndIncrement(), u, d) else null
-                            } finally {
-                                r.release()
-                            }
-                        }.getOrNull()
-                    }
-                }
+                val added = importClips(ctx, uris)
                 if (added.isEmpty()) toast("Video load nahi hui") else commit(newClips = clips + added)
             }
         }
@@ -235,7 +285,7 @@ fun EditorScreen() {
                 val splitAt = c.trimStartMs + off
                 val list = clips.toMutableList()
                 list[i] = c.copy(trimEndMs = splitAt)
-                list.add(i + 1, c.copy(id = idGen.getAndIncrement(), trimStartMs = splitAt))
+                list.add(i + 1, c.copy(id = Ids.next(), trimStartMs = splitAt))
                 commit(newClips = list)
                 return
             }
@@ -271,7 +321,7 @@ fun EditorScreen() {
             commit(newMarkers = markers.filterNot { it.id == near.id })
             toast("Marker hataya")
         } else {
-            commit(newMarkers = (markers + Marker(idGen.getAndIncrement(), posMs)).sortedBy { it.timeMs })
+            commit(newMarkers = (markers + Marker(Ids.next(), posMs)).sortedBy { it.timeMs })
             toast("Marker add hua")
         }
     }
@@ -292,16 +342,30 @@ fun EditorScreen() {
     Column(Modifier.fillMaxSize().background(Bg)) {
         // Top bar
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("BoldCut", color = Color.White, fontSize = 18.sp, modifier = Modifier.weight(1f))
+            Text(
+                "‹",
+                color = Color.White,
+                fontSize = 30.sp,
+                modifier = Modifier.clickable { leave() }.padding(horizontal = 12.dp)
+            )
+            Text(
+                name,
+                color = Color.White,
+                fontSize = 16.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
             Button(
-                onClick = { toast("Export Step 4 me aayega") },
+                onClick = { toast("Export Step 5 me aayega") },
                 colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color.Black),
                 contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
                 modifier = Modifier.height(32.dp)
             ) { Text("Export", fontSize = 13.sp) }
+            Spacer(Modifier.width(8.dp))
         }
 
         // Preview

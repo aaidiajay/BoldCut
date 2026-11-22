@@ -2,6 +2,7 @@ package com.boldframe.boldcut
 
 import android.net.Uri
 import androidx.media3.common.MediaItem
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Core data model. Aage keyframes, effects, masks sab isi pe judenge.
@@ -38,3 +39,28 @@ data class Marker(val id: Long, val timeMs: Long)
 
 // Undo/redo ke liye poore edit ka snapshot
 data class EditState(val clips: List<Clip>, val markers: List<Marker>)
+
+// Unique ids (clips, markers) - time based, taaki alag sessions me bhi na takraye
+object Ids {
+    private val n = AtomicLong(System.currentTimeMillis())
+    fun next(): Long = n.incrementAndGet()
+}
+
+// Disk pe save hone wala project
+data class SavedProject(
+    val id: String,
+    val name: String,
+    val createdAt: Long,
+    val modifiedAt: Long,
+    val clips: List<Clip>,
+    val markers: List<Marker>
+)
+
+// Home screen ki list ke liye halka summary
+data class ProjectMeta(
+    val id: String,
+    val name: String,
+    val modifiedAt: Long,
+    val durationMs: Long,
+    val clipCount: Int
+)
