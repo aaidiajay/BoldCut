@@ -8,6 +8,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -29,7 +30,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -40,6 +40,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -53,6 +54,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 private val Bg = Color(0xFF0E0E10)
 private val Panel = Color(0xFF18181B)
@@ -64,12 +67,18 @@ private fun fmt(ms: Long): String =
 @Composable
 fun EditorScreen() {
     val ctx = LocalContext.current
+    val density = LocalDensity.current
     val scope = rememberCoroutineScope()
+    val scrollState = rememberScrollState()
+    val pxPerMs = with(density) { DP_PER_SEC.dp.toPx() } / 1000f
 
-    val clips = remember { mutableStateListOf<Clip>() }
+    var clips by remember { mutableStateOf(emptyList<Clip>()) }
+    var markers by remember { mutableStateOf(emptyList<Marker>()) }
     var selectedId by remember { mutableStateOf<Long?>(null) }
     var posMs by remember { mutableLongStateOf(0L) }
     var playing by remember { mutableStateOf(false) }
+    var undoStack by remember { mutableStateOf(emptyList<EditState>()) }
+    var redoStack by remember { mutableStateOf(emptyList<EditState>()) }
     val idGen = remember { AtomicLong(1) }
 
     val player = remember {
@@ -81,6 +90,33 @@ fun EditorScreen() {
     fun toast(msg: String) = Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
     fun totalMs(): Long = clips.sumOf { it.lengthMs }
 
+    // ---- Undo / Redo ----
+    fun commit(newClips: List<Clip> = clips, newMarkers: List<Marker> = markers) {
+        undoStack = (undoStack + EditState(clips, markers)).takeLast(50)
+        redoStack = emptyList()
+        clips = newClips
+        markers = newMarkers
+    }
+
+    fun undo() {
+        val last = undoStack.lastOrNull() ?: return
+        redoStack = redoStack + EditState(clips, markers)
+        undoStack = undoStack.dropLast(1)
+        clips = last.clips
+        markers = last.markers
+        selectedId = null
+    }
+
+    fun redo() {
+        val next = redoStack.lastOrNull() ?: return
+        undoStack = undoStack + EditState(clips, markers)
+        redoStack = redoStack.dropLast(1)
+        clips = next.clips
+        markers = next.markers
+        selectedId = null
+    }
+
+    // ---- Player helpers ----
     fun seekGlobal(ms: Long) {
         var rem = ms.coerceAtLeast(0L)
         for ((i, c) in clips.withIndex()) {
@@ -90,6 +126,13 @@ fun EditorScreen() {
             }
             rem -= c.lengthMs
         }
+    }
+
+    // Timeline ko kisi bhi time pe le jao (scroll karna hi seek bhi karta hai)
+    fun jumpTo(ms: Long) {
+        player.pause()
+        playing = false
+        scope.launch { scrollState.scrollTo((ms * pxPerMs).roundToInt()) }
     }
 
     DisposableEffect(player) {
@@ -107,7 +150,7 @@ fun EditorScreen() {
 
     // Clips badle to player ki playlist dobara banao
     LaunchedEffect(Unit) {
-        snapshotFlow { clips.toList() }.collect { list ->
+        snapshotFlow { clips }.collect { list ->
             if (list.isEmpty()) {
                 player.clearMediaItems()
                 posMs = 0L
@@ -153,7 +196,7 @@ fun EditorScreen() {
                         }.getOrNull()
                     }
                 }
-                if (added.isEmpty()) toast("Video load nahi hui") else clips.addAll(added)
+                if (added.isEmpty()) toast("Video load nahi hui") else commit(newClips = clips + added)
             }
         }
     }
@@ -173,6 +216,7 @@ fun EditorScreen() {
             if (player.playbackState == Player.STATE_ENDED || posMs >= totalMs() - 50) {
                 posMs = 0L
                 seekGlobal(0L)
+                scope.launch { scrollState.scrollTo(0) }
             }
             player.play()
         }
@@ -189,8 +233,10 @@ fun EditorScreen() {
                     return
                 }
                 val splitAt = c.trimStartMs + off
-                clips[i] = c.copy(trimEndMs = splitAt)
-                clips.add(i + 1, c.copy(id = idGen.getAndIncrement(), trimStartMs = splitAt))
+                val list = clips.toMutableList()
+                list[i] = c.copy(trimEndMs = splitAt)
+                list.add(i + 1, c.copy(id = idGen.getAndIncrement(), trimStartMs = splitAt))
+                commit(newClips = list)
                 return
             }
             start = end
@@ -204,8 +250,43 @@ fun EditorScreen() {
             toast("Pehle clip pe tap karke select karo")
             return
         }
-        clips.removeAll { it.id == id }
+        commit(newClips = clips.filterNot { it.id == id })
         selectedId = null
+    }
+
+    fun trimClip(id: Long, newStart: Long, newEnd: Long) {
+        commit(newClips = clips.map {
+            if (it.id == id) it.copy(trimStartMs = newStart, trimEndMs = newEnd) else it
+        })
+    }
+
+    // ---- Markers ----
+    fun toggleMarker() {
+        if (clips.isEmpty()) {
+            toast("Pehle video add karo")
+            return
+        }
+        val near = markers.firstOrNull { abs(it.timeMs - posMs) <= 150 }
+        if (near != null) {
+            commit(newMarkers = markers.filterNot { it.id == near.id })
+            toast("Marker hataya")
+        } else {
+            commit(newMarkers = (markers + Marker(idGen.getAndIncrement(), posMs)).sortedBy { it.timeMs })
+            toast("Marker add hua")
+        }
+    }
+
+    fun jumpMarker(next: Boolean) {
+        val t = if (next) {
+            markers.filter { it.timeMs > posMs + 50 }.minByOrNull { it.timeMs }
+        } else {
+            markers.filter { it.timeMs < posMs - 50 }.maxByOrNull { it.timeMs }
+        }
+        if (t == null) {
+            toast("Aur marker nahi hai")
+            return
+        }
+        jumpTo(t.timeMs)
     }
 
     Column(Modifier.fillMaxSize().background(Bg)) {
@@ -216,7 +297,7 @@ fun EditorScreen() {
         ) {
             Text("BoldCut", color = Color.White, fontSize = 18.sp, modifier = Modifier.weight(1f))
             Button(
-                onClick = { toast("Export Step 3 me aayega") },
+                onClick = { toast("Export Step 4 me aayega") },
                 colors = ButtonDefaults.buttonColors(containerColor = Accent, contentColor = Color.Black),
                 contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp),
                 modifier = Modifier.height(32.dp)
@@ -242,17 +323,19 @@ fun EditorScreen() {
             }
         }
 
-        // Transport
+        // Transport: time | marker prev, play, marker next | undo redo
         Row(
-            Modifier.fillMaxWidth().background(Panel).padding(horizontal = 12.dp, vertical = 6.dp),
+            Modifier.fillMaxWidth().background(Panel).padding(horizontal = 8.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
                 "${fmt(posMs)} / ${fmt(totalMs())}",
                 color = Color(0xFFB0B4BA),
                 fontSize = 13.sp,
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f).padding(start = 4.dp)
             )
+            SmallBtn("◆◀") { jumpMarker(false) }
+            Spacer(Modifier.width(4.dp))
             Box(
                 Modifier.size(42.dp).clip(CircleShape).background(Color.White)
                     .clickable { togglePlay() },
@@ -260,21 +343,30 @@ fun EditorScreen() {
             ) {
                 Text(if (playing) "⏸" else "▶", color = Color.Black, fontSize = 18.sp)
             }
-            Spacer(Modifier.weight(1f))
+            Spacer(Modifier.width(4.dp))
+            SmallBtn("▶◆") { jumpMarker(true) }
+            Row(Modifier.weight(1f), horizontalArrangement = Arrangement.End) {
+                SmallBtn("↩", enabled = undoStack.isNotEmpty()) { undo() }
+                SmallBtn("↪", enabled = redoStack.isNotEmpty()) { redo() }
+            }
         }
 
         // Timeline
         Timeline(
             clips = clips,
+            markers = markers,
             selectedId = selectedId,
             posMs = posMs,
             playing = playing,
+            scrollState = scrollState,
             onSelect = { selectedId = if (selectedId == it) null else it },
             onSeek = { ms ->
                 posMs = ms
                 seekGlobal(ms)
             },
-            onUserDrag = { player.pause() }
+            onUserDrag = { player.pause() },
+            onTrim = { id, s, e -> trimClip(id, s, e) },
+            onMarkerClick = { jumpTo(it.timeMs) }
         )
 
         // Bottom toolbar
@@ -284,13 +376,26 @@ fun EditorScreen() {
             ToolItem("➕", "Add") { addVideo() }
             ToolItem("✂️", "Split") { splitAtPlayhead() }
             ToolItem("🗑", "Delete") { deleteSelected() }
-            ToolItem("🔤", "Text") { toast("Text Step 3 me") }
+            ToolItem("📍", "Marker") { toggleMarker() }
+            ToolItem("🔤", "Text") { toast("Text aage ke Step me") }
             ToolItem("🎵", "Audio") { toast("Audio aage ke Step me") }
             ToolItem("✨", "Effects") { toast("Effects aage ke Step me") }
             ToolItem("◐", "Mask") { toast("Mask/Roto aage ke Step me") }
             ToolItem("🤖", "AI") { toast("AI generate aage ke Step me") }
         }
     }
+}
+
+@Composable
+private fun SmallBtn(label: String, enabled: Boolean = true, onClick: () -> Unit) {
+    Text(
+        label,
+        color = if (enabled) Color.White else Color(0xFF55595F),
+        fontSize = 18.sp,
+        modifier = Modifier
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 8.dp)
+    )
 }
 
 @Composable

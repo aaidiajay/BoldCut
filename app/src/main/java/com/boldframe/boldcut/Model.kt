@@ -32,3 +32,9 @@ fun Clip.toMediaItem(): MediaItem =
                 .build()
         )
         .build()
+
+// Premiere-style marker: timeline ke global time pe
+data class Marker(val id: Long, val timeMs: Long)
+
+// Undo/redo ke liye poore edit ka snapshot
+data class EditState(val clips: List<Clip>, val markers: List<Marker>)

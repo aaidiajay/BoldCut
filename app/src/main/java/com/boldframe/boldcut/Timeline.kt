@@ -5,9 +5,11 @@ import android.graphics.Bitmap
 import android.media.MediaMetadataRetriever
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.Box
@@ -19,15 +21,19 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -36,6 +42,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -48,7 +55,9 @@ import kotlin.math.roundToInt
 
 const val DP_PER_SEC = 50f
 private const val TILE_DP = 56f
+private const val MIN_CLIP_MS = 300L
 private val Accent = Color(0xFFFFC107)
+private val MarkerColor = Color(0xFF2EC4B6)
 
 /**
  * CapCut-style timeline: playhead beech me fixed, clips scroll hote hain.
@@ -58,14 +67,17 @@ private val Accent = Color(0xFFFFC107)
 @Composable
 fun Timeline(
     clips: List<Clip>,
+    markers: List<Marker>,
     selectedId: Long?,
     posMs: Long,
     playing: Boolean,
+    scrollState: ScrollState,
     onSelect: (Long) -> Unit,
     onSeek: (Long) -> Unit,
-    onUserDrag: () -> Unit
+    onUserDrag: () -> Unit,
+    onTrim: (Long, Long, Long) -> Unit,
+    onMarkerClick: (Marker) -> Unit
 ) {
-    val scrollState = rememberScrollState()
     val density = LocalDensity.current
     val pxPerMs = with(density) { DP_PER_SEC.dp.toPx() } / 1000f
     val dragged by scrollState.interactionSource.collectIsDraggedAsState()
@@ -97,14 +109,34 @@ fun Timeline(
                 Spacer(Modifier.width(half))
                 Column {
                     val totalDp = with(density) { (totalMs * pxPerMs).toDp() }
-                    Ruler(totalMs, Modifier.width(totalDp).height(22.dp))
+                    Box(Modifier.width(totalDp).height(22.dp)) {
+                        Ruler(totalMs, Modifier.fillMaxSize())
+                        markers.filter { it.timeMs <= totalMs }.forEach { m ->
+                            Box(
+                                Modifier
+                                    .offset(x = with(density) { (m.timeMs * pxPerMs).toDp() } - 12.dp)
+                                    .width(24.dp)
+                                    .fillMaxHeight()
+                                    .clickable { onMarkerClick(m) },
+                                contentAlignment = Alignment.BottomCenter
+                            ) {
+                                Box(
+                                    Modifier
+                                        .width(8.dp)
+                                        .height(14.dp)
+                                        .background(MarkerColor, RoundedCornerShape(2.dp))
+                                )
+                            }
+                        }
+                    }
                     Row {
                         clips.forEach { clip ->
                             ClipBlock(
                                 clip = clip,
                                 selected = clip.id == selectedId,
-                                widthDp = with(density) { (clip.lengthMs * pxPerMs).toDp() },
-                                onClick = { onSelect(clip.id) }
+                                pxPerMs = pxPerMs,
+                                onClick = { onSelect(clip.id) },
+                                onTrim = onTrim
                             )
                         }
                     }
@@ -155,10 +187,12 @@ private fun Ruler(totalMs: Long, modifier: Modifier) {
 private fun ClipBlock(
     clip: Clip,
     selected: Boolean,
-    widthDp: androidx.compose.ui.unit.Dp,
-    onClick: () -> Unit
+    pxPerMs: Float,
+    onClick: () -> Unit,
+    onTrim: (Long, Long, Long) -> Unit
 ) {
     val ctx = LocalContext.current
+    val density = LocalDensity.current
     val tileMs = (TILE_DP / DP_PER_SEC * 1000).toLong()
     val tileCount = ceil(clip.lengthMs / 1000f * DP_PER_SEC / TILE_DP).toInt().coerceIn(1, 400)
 
@@ -168,8 +202,17 @@ private fun ClipBlock(
         value = withContext(Dispatchers.IO) { loadThumbs(ctx, clip, tileCount, tileMs) }
     }
 
+    // Trim drag ke time ka temporary change; ungli chhodne pe hi commit hota hai
+    var pendingLeft by remember(clip.id, clip.trimStartMs, clip.trimEndMs) { mutableLongStateOf(0L) }
+    var pendingRight by remember(clip.id, clip.trimStartMs, clip.trimEndMs) { mutableLongStateOf(0L) }
+    val curClip by rememberUpdatedState(clip)
+
+    val effLen = clip.lengthMs - pendingLeft + pendingRight
+    val widthDp = with(density) { (effLen * pxPerMs).toDp() }
+    val cropDp = with(density) { (pendingLeft * pxPerMs).toDp() }
+
     val shape = RoundedCornerShape(4.dp)
-    Row(
+    Box(
         Modifier
             .width(widthDp)
             .height(56.dp)
@@ -182,20 +225,92 @@ private fun ClipBlock(
             )
             .clickable(onClick = onClick)
     ) {
-        thumbs.forEach { bmp ->
-            if (bmp != null) {
-                Image(
-                    bitmap = bmp,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .width(TILE_DP.dp)
-                        .fillMaxHeight()
-                )
-            } else {
-                Spacer(Modifier.width(TILE_DP.dp))
+        Row(
+            Modifier
+                .height(56.dp)
+                .wrapContentWidth(Alignment.Start, unbounded = true)
+                .offset(x = -cropDp)
+        ) {
+            thumbs.forEach { bmp ->
+                if (bmp != null) {
+                    Image(
+                        bitmap = bmp,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .width(TILE_DP.dp)
+                            .fillMaxHeight()
+                    )
+                } else {
+                    Spacer(Modifier.width(TILE_DP.dp))
+                }
             }
         }
+
+        if (selected) {
+            TrimHandle(
+                modifier = Modifier.align(Alignment.CenterStart),
+                onDrag = { dx ->
+                    val c = curClip
+                    val dMs = (dx / pxPerMs).toLong()
+                    val lo = -c.trimStartMs
+                    val hi = maxOf(c.lengthMs + pendingRight - MIN_CLIP_MS, lo)
+                    pendingLeft = (pendingLeft + dMs).coerceIn(lo, hi)
+                },
+                onEnd = {
+                    if (pendingLeft != 0L || pendingRight != 0L) {
+                        val c = curClip
+                        onTrim(c.id, c.trimStartMs + pendingLeft, c.trimEndMs + pendingRight)
+                    }
+                }
+            )
+            TrimHandle(
+                modifier = Modifier.align(Alignment.CenterEnd),
+                onDrag = { dx ->
+                    val c = curClip
+                    val dMs = (dx / pxPerMs).toLong()
+                    val hi = c.durationMs - c.trimEndMs
+                    val lo = minOf(-(c.lengthMs - pendingLeft - MIN_CLIP_MS), hi)
+                    pendingRight = (pendingRight + dMs).coerceIn(lo, hi)
+                },
+                onEnd = {
+                    if (pendingLeft != 0L || pendingRight != 0L) {
+                        val c = curClip
+                        onTrim(c.id, c.trimStartMs + pendingLeft, c.trimEndMs + pendingRight)
+                    }
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun TrimHandle(modifier: Modifier, onDrag: (Float) -> Unit, onEnd: () -> Unit) {
+    val drag by rememberUpdatedState(onDrag)
+    val end by rememberUpdatedState(onEnd)
+    Box(
+        modifier
+            .width(16.dp)
+            .fillMaxHeight()
+            .background(Accent)
+            .pointerInput(Unit) {
+                detectHorizontalDragGestures(
+                    onDragEnd = { end() },
+                    onDragCancel = { end() },
+                    onHorizontalDrag = { change, dx ->
+                        change.consume()
+                        drag(dx)
+                    }
+                )
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Box(
+            Modifier
+                .width(2.dp)
+                .height(18.dp)
+                .background(Color.Black)
+        )
     }
 }
 
