@@ -300,6 +300,8 @@ private fun Ruler(
     val style = remember(labelColor) { TextStyle(color = labelColor, fontSize = 9.sp) }
     val major = RULER_STEPS.firstOrNull { it * dpPerSec >= 70.0 } ?: 3600.0
     Canvas(modifier) {
+        // Khaali timeline (width 0) par kuch draw mat karo
+        if (totalMs <= 0L || size.width <= 0f) return@Canvas
         val pxSec = dpPerSec.dp.toPx().toDouble()
         val minor = major / 5.0
         val startPx = (scroll.value - halfPx).toDouble()
@@ -314,12 +316,9 @@ private fun Ruler(
             val h = if (isMajor) size.height * 0.45f else size.height * 0.22f
             drawLine(tick, Offset(x, size.height - h), Offset(x, size.height), 1.dp.toPx())
             if (isMajor) {
-                drawText(
-                    measurer,
-                    rulerLabel(t, major),
-                    topLeft = Offset(x + 3.dp.toPx(), 1.dp.toPx()),
-                    style = style
-                )
+                // Pehle measure, phir draw: canvas ke bahar ka text bhi crash nahi karega
+                val layout = measurer.measure(rulerLabel(t, major), style)
+                drawText(layout, topLeft = Offset(x + 3.dp.toPx(), 1.dp.toPx()))
             }
         }
     }

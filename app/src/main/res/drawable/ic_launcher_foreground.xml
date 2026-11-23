@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Amber play button (rounded corners via stroke) -->
+    <path
+        android:fillColor="#FFFFC107"
+        android:pathData="M43,35 L43,73 L75,54 Z"
+        android:strokeColor="#FFFFC107"
+        android:strokeLineJoin="round"
+        android:strokeWidth="7" />
+    <!-- "Cut" slash -->
+    <path
+        android:pathData="M34,80 L74,28"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round"
+        android:strokeWidth="3.5" />
+</vector>

@@ -95,7 +95,7 @@ fun SettingsScreen(mode: ThemeMode, onMode: (ThemeMode) -> Unit, onClose: () -> 
                     .padding(16.dp)
             ) {
                 Text("BoldCut", color = c.text, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                Text("Version 0.6.1", color = c.muted, fontSize = 13.sp)
+                Text("Version 0.6.2", color = c.muted, fontSize = 13.sp)
             }
             Spacer(Modifier.height(24.dp))
         }

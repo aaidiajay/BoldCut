@@ -11,8 +11,8 @@ android {
         applicationId = "com.boldframe.boldcut"
         minSdk = 26
         targetSdk = 34
-        versionCode = 8
-        versionName = "0.6.1"
+        versionCode = 9
+        versionName = "0.6.2"
     }
 
     buildTypes {
