@@ -1,6 +1,7 @@
 package com.boldframe.boldcut
 
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -134,6 +135,9 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
     var pz by remember { mutableStateOf(1f) }
     var pan by remember { mutableStateOf(Offset.Zero) }
     var showSide by remember { mutableStateOf(false) }
+    var fullPreview by remember { mutableStateOf(false) }
+    var lowQ by remember { mutableStateOf(false) }
+    var outlines by remember { mutableStateOf(false) }
     val screenWdp = LocalConfiguration.current.screenWidthDp
     var videoSize by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var exportSettings by remember { mutableStateOf(ExportSettings()) }
@@ -147,6 +151,22 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
 
     fun toast(msg: String) = Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
     fun totalMs(): Long = clips.sumOf { it.lengthMs }
+
+    // Full-screen preview: landscape video ho to phone ghuma dete hain
+    fun setFull(on: Boolean) {
+        fullPreview = on
+        val act = ctx.findActivity()
+        val landscape = videoSize?.let { it.first > it.second } == true
+        act?.requestedOrientation =
+            if (on && landscape) ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            else ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            ctx.findActivity()?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        }
+    }
 
     fun zoomBy(f: Float) {
         dpPerSec = clampDps(dpPerSec * f, totalMs(), density.density)
@@ -192,7 +212,9 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
     }
 
     BackHandler(onBack = {
-        if (selectedId != null) selectedId = null else leave()
+        if (fullPreview) setFull(false)
+        else if (selectedId != null) selectedId = null
+        else leave()
     })
 
     LaunchedEffect(projectId) {
@@ -330,6 +352,13 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
             delay(300)
             runner.pollProgress()
         }
+    }
+
+    // Low quality preview: player ko 480p tak limit (asli proxy Step 7 me)
+    LaunchedEffect(lowQ) {
+        val b = player.trackSelectionParameters.buildUpon()
+        if (lowQ) b.setMaxVideoSize(854, 480) else b.clearVideoSizeConstraints()
+        player.trackSelectionParameters = b.build()
     }
 
     val picker = rememberLauncherForActivityResult(
@@ -474,6 +503,7 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
 
     Column(Modifier.fillMaxSize().background(c.bg)) {
         // Top bar
+        if (!fullPreview) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -500,6 +530,8 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
                 Text("Export", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             }
             Spacer(Modifier.width(8.dp))
+        }
+
         }
 
         // Preview: zoom/pan + grid + right side toolbar
@@ -536,6 +568,7 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
                     }
                 )
                 GridOverlay(grid, aspect, Modifier.fillMaxSize())
+                if (outlines && clips.isNotEmpty()) OutlineOverlay(aspect, Modifier.fillMaxSize())
             }
             if (clips.isEmpty()) {
                 Text(
@@ -545,14 +578,20 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
                     modifier = Modifier.align(Alignment.Center)
                 )
             }
-            if (showSide) {
+            if (showSide && !fullPreview) {
                 PreviewSideBar(
                     modifier = Modifier.align(Alignment.CenterEnd),
                     zoomPct = (pz * 100).roundToInt(),
                     gridOn = grid.enabled,
-                    onCanvas = { toast("Canvas settings Step 8 me") },
+                    lowQ = lowQ,
+                    outlinesOn = outlines,
+                    onFull = { setFull(true) },
+                    onLowQ = {
+                        lowQ = !lowQ
+                        toast(if (lowQ) "Low quality preview ON (asli proxy Step 7 me)" else "Low quality preview OFF")
+                    },
                     onGrid = { showGrid = true },
-                    onLayers = { toast("Layers panel Step 9 me") },
+                    onOutlines = { outlines = !outlines },
                     onCamera = { toast("3D camera view Step 10 me") },
                     onZoomIn = { pz = (pz * 1.25f).coerceIn(0.25f, 4f) },
                     onZoomOut = {
@@ -565,8 +604,36 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
                     }
                 )
             }
+
+            // Full-screen controls
+            if (fullPreview) {
+                val white = Color(0xE6FFFFFF)
+                Row(
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(12.dp)
+                        .clip(RoundedCornerShape(28.dp))
+                        .background(Color(0x99000000))
+                        .padding(horizontal = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconBtn(
+                        if (playing) Icons.Outlined.Pause else Icons.Outlined.PlayArrow,
+                        onClick = { togglePlay() },
+                        tint = white
+                    )
+                    Text(
+                        "${fmt(posMs)} / ${fmt(totalMs())}",
+                        color = white,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(horizontal = 6.dp)
+                    )
+                    IconBtn(Icons.Outlined.FullscreenExit, onClick = { setFull(false) }, tint = white)
+                }
+            }
         }
 
+        if (!fullPreview) {
         // Transport row (reference jaisa): undo redo prev play next duplicate panel-toggle
         Row(
             Modifier.fillMaxWidth().background(c.surface).padding(horizontal = 4.dp, vertical = 2.dp),
@@ -731,6 +798,7 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
                 }
             }
         }
+        }
     }
 
     // ---- Grid sheet ----
@@ -790,9 +858,12 @@ private fun PreviewSideBar(
     modifier: Modifier,
     zoomPct: Int,
     gridOn: Boolean,
-    onCanvas: () -> Unit,
+    lowQ: Boolean,
+    outlinesOn: Boolean,
+    onFull: () -> Unit,
+    onLowQ: () -> Unit,
     onGrid: () -> Unit,
-    onLayers: () -> Unit,
+    onOutlines: () -> Unit,
     onCamera: () -> Unit,
     onZoomIn: () -> Unit,
     onZoomOut: () -> Unit,
@@ -807,9 +878,10 @@ private fun PreviewSideBar(
             .background(Color(0x99000000)),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        IconBtn(Icons.Outlined.RoundedCorner, onCanvas, tint = white)
+        IconBtn(Icons.Outlined.Fullscreen, onFull, tint = white)
+        IconBtn(Icons.Outlined.RoundedCorner, onLowQ, tint = if (lowQ) c.accent else white)
         IconBtn(Icons.Outlined.GridOn, onGrid, tint = if (gridOn) c.accent else white)
-        IconBtn(Icons.Outlined.Layers, onLayers, tint = white)
+        IconBtn(Icons.Outlined.Layers, onOutlines, tint = if (outlinesOn) c.accent else white)
         // 3D camera view on/off (Step 10 me kaam karega)
         IconBtn(Icons.Outlined.VideocamOff, onCamera, tint = Color(0xFF9A9AB0))
         Spacer(Modifier.height(6.dp))

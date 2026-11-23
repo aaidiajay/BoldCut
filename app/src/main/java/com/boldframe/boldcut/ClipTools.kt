@@ -334,3 +334,36 @@ fun ClipBar(
         Spacer(Modifier.height(4.dp))
     }
 }
+
+// ---------------- Layer outline overlay ----------------
+
+@Composable
+fun OutlineOverlay(aspect: Float, modifier: Modifier) {
+    Canvas(modifier) {
+        val boxW = size.width
+        val boxH = size.height
+        var w = boxW
+        var h = w / aspect
+        if (h > boxH) {
+            h = boxH
+            w = h * aspect
+        }
+        val left = (boxW - w) / 2f
+        val top = (boxH - h) / 2f
+        val col = Color(0xFF3DE0FF)
+        drawRect(col, topLeft = Offset(left, top), size = Size(w, h), style = Stroke(2.dp.toPx()))
+        val hs = 7.dp.toPx()
+        val xs = listOf(left, left + w / 2f, left + w)
+        val ys = listOf(top, top + h / 2f, top + h)
+        for (xi in 0..2) {
+            for (yi in 0..2) {
+                if (xi == 1 && yi == 1) continue
+                drawRect(
+                    Color.White,
+                    topLeft = Offset(xs[xi] - hs / 2f, ys[yi] - hs / 2f),
+                    size = Size(hs, hs)
+                )
+            }
+        }
+    }
+}

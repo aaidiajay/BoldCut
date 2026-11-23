@@ -107,7 +107,7 @@ object Bc {
         get() = LocalBc.current
 }
 
-private fun Context.findActivity(): Activity? {
+fun Context.findActivity(): Activity? {
     var c: Context? = this
     while (c is ContextWrapper) {
         if (c is Activity) return c
