@@ -183,11 +183,12 @@ fun IconBtn(
     onClick: () -> Unit,
     enabled: Boolean = true,
     tint: Color = Bc.c.text,
-    size: Dp = 24.dp
+    size: Dp = 24.dp,
+    box: Dp = 44.dp
 ) {
     Box(
         Modifier
-            .size(44.dp)
+            .size(box)
             .clip(CircleShape)
             .clickable(enabled = enabled, onClick = onClick),
         contentAlignment = Alignment.Center

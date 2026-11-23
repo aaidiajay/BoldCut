@@ -110,12 +110,17 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
     val runner = remember { ExportRunner(ctx.applicationContext, scope) }
 
     var dpPerSec by remember { mutableStateOf(BASE_DP_PER_SEC) }
-    val pxPerMs = with(density) { dpPerSec.dp.toPx() } / 1000f
 
     var name by remember { mutableStateOf("Project") }
     var loaded by remember { mutableStateOf(false) }
     var clips by remember { mutableStateOf(emptyList<Clip>()) }
     var markers by remember { mutableStateOf(emptyList<Marker>()) }
+    val totalNow = clips.sumOf { it.lengthMs }
+    val effDps = clampDps(dpPerSec, totalNow, density.density)
+    val pxPerMs = with(density) { effDps.dp.toPx() } / 1000f
+    LaunchedEffect(totalNow) {
+        if (dpPerSec != effDps) dpPerSec = effDps
+    }
     var selectedId by remember { mutableStateOf<Long?>(null) }
     var posMs by remember { mutableLongStateOf(0L) }
     var playing by remember { mutableStateOf(false) }
@@ -128,7 +133,7 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
     var showGrid by remember { mutableStateOf(false) }
     var pz by remember { mutableStateOf(1f) }
     var pan by remember { mutableStateOf(Offset.Zero) }
-    var videoHidden by remember { mutableStateOf(false) }
+    var showSide by remember { mutableStateOf(false) }
     val screenWdp = LocalConfiguration.current.screenWidthDp
     var videoSize by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var exportSettings by remember { mutableStateOf(ExportSettings()) }
@@ -144,7 +149,7 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
     fun totalMs(): Long = clips.sumOf { it.lengthMs }
 
     fun zoomBy(f: Float) {
-        dpPerSec = (dpPerSec * f).coerceIn(MIN_DPS, MAX_DPS)
+        dpPerSec = clampDps(dpPerSec * f, totalMs(), density.density)
     }
 
     // Poora project screen me fit karo
@@ -154,7 +159,7 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
             toast("Pehle video add karo")
             return
         }
-        dpPerSec = (screenWdp * 0.85f / sec).coerceIn(MIN_DPS, MAX_DPS)
+        dpPerSec = clampDps(screenWdp * 0.85f / sec, totalMs(), density.density)
     }
 
     // ---- Project save ----
@@ -521,17 +526,15 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
                     .requiredSize(boxW * pz, boxH * pz)
                     .offset { IntOffset(pan.x.roundToInt(), pan.y.roundToInt()) }
             ) {
-                if (!videoHidden) {
-                    AndroidView(
-                        modifier = Modifier.fillMaxSize(),
-                        factory = { ctxView ->
-                            PlayerView(ctxView).apply {
-                                this.player = player
-                                useController = false
-                            }
+                AndroidView(
+                    modifier = Modifier.fillMaxSize(),
+                    factory = { ctxView ->
+                        PlayerView(ctxView).apply {
+                            this.player = player
+                            useController = false
                         }
-                    )
-                }
+                    }
+                )
                 GridOverlay(grid, aspect, Modifier.fillMaxSize())
             }
             if (clips.isEmpty()) {
@@ -542,55 +545,85 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
                     modifier = Modifier.align(Alignment.Center)
                 )
             }
-            PreviewSideBar(
-                modifier = Modifier.align(Alignment.CenterEnd),
-                zoomPct = (pz * 100).roundToInt(),
-                gridOn = grid.enabled,
-                videoHidden = videoHidden,
-                onAspect = { toast("Aspect ratio Step 8 me") },
-                onGrid = { showGrid = true },
-                onLayers = { toast("Layers panel Step 9 me") },
-                onToggleVideo = { videoHidden = !videoHidden },
-                onZoomIn = { pz = (pz * 1.25f).coerceIn(0.25f, 4f) },
-                onZoomOut = {
-                    pz = (pz / 1.25f).coerceIn(0.25f, 4f)
-                    if (pz <= 1f) pan = Offset.Zero
-                },
-                onZoomReset = {
-                    pz = 1f
-                    pan = Offset.Zero
-                }
-            )
+            if (showSide) {
+                PreviewSideBar(
+                    modifier = Modifier.align(Alignment.CenterEnd),
+                    zoomPct = (pz * 100).roundToInt(),
+                    gridOn = grid.enabled,
+                    onCanvas = { toast("Canvas settings Step 8 me") },
+                    onGrid = { showGrid = true },
+                    onLayers = { toast("Layers panel Step 9 me") },
+                    onCamera = { toast("3D camera view Step 10 me") },
+                    onZoomIn = { pz = (pz * 1.25f).coerceIn(0.25f, 4f) },
+                    onZoomOut = {
+                        pz = (pz / 1.25f).coerceIn(0.25f, 4f)
+                        if (pz <= 1f) pan = Offset.Zero
+                    },
+                    onZoomReset = {
+                        pz = 1f
+                        pan = Offset.Zero
+                    }
+                )
+            }
         }
 
-        // Transport row
+        // Transport row (reference jaisa): undo redo prev play next duplicate panel-toggle
         Row(
-            Modifier.fillMaxWidth().background(c.surface).padding(horizontal = 6.dp, vertical = 2.dp),
+            Modifier.fillMaxWidth().background(c.surface).padding(horizontal = 4.dp, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
                 "${fmt(posMs)} / ${fmt(totalMs())}",
                 color = c.muted,
-                fontSize = 12.sp,
+                fontSize = 11.sp,
                 maxLines = 1,
                 softWrap = false,
                 modifier = Modifier.weight(1f).padding(start = 6.dp)
             )
-            IconBtn(Icons.Outlined.Undo, onClick = { undo() }, enabled = undoStack.isNotEmpty())
-            IconBtn(Icons.Outlined.Redo, onClick = { redo() }, enabled = redoStack.isNotEmpty())
-            IconBtn(Icons.Outlined.SkipPrevious, onClick = { skipClip(false) })
+            IconBtn(Icons.Outlined.Undo, onClick = { undo() }, enabled = undoStack.isNotEmpty(), box = 38.dp)
+            IconBtn(Icons.Outlined.Redo, onClick = { redo() }, enabled = redoStack.isNotEmpty(), box = 38.dp)
+            IconBtn(Icons.Outlined.SkipPrevious, onClick = { skipClip(false) }, box = 38.dp)
             Box(
-                Modifier.size(42.dp).clip(CircleShape).background(c.text)
+                Modifier.size(40.dp).clip(CircleShape).background(c.text)
                     .clickable { togglePlay() },
                 contentAlignment = Alignment.Center
             ) {
                 BcIcon(
                     if (playing) Icons.Outlined.Pause else Icons.Outlined.PlayArrow,
                     tint = c.bg,
-                    size = 26.dp
+                    size = 24.dp
                 )
             }
-            IconBtn(Icons.Outlined.SkipNext, onClick = { skipClip(true) })
+            IconBtn(Icons.Outlined.SkipNext, onClick = { skipClip(true) }, box = 38.dp)
+            IconBtn(
+                Icons.Outlined.ContentCopy,
+                onClick = {
+                    if (selectedId == null) toast("Pehle clip select karo") else duplicateSelected()
+                },
+                box = 38.dp,
+                size = 22.dp
+            )
+            // Preview side panel toggle (fit-screen icon + chhota arrow)
+            Box(
+                Modifier
+                    .size(38.dp)
+                    .clip(CircleShape)
+                    .clickable { showSide = !showSide },
+                contentAlignment = Alignment.Center
+            ) {
+                BcIcon(
+                    Icons.Outlined.FitScreen,
+                    tint = if (showSide) c.accent else c.text,
+                    size = 22.dp,
+                    modifier = Modifier.offset(y = 3.dp)
+                )
+                BcIcon(
+                    if (showSide) Icons.Outlined.ArrowDropUp else Icons.Outlined.ArrowDropDown,
+                    tint = if (showSide) c.accent else c.text,
+                    size = 16.dp,
+                    modifier = Modifier.align(Alignment.TopCenter)
+                )
+            }
         }
 
         // Timeline
@@ -757,11 +790,10 @@ private fun PreviewSideBar(
     modifier: Modifier,
     zoomPct: Int,
     gridOn: Boolean,
-    videoHidden: Boolean,
-    onAspect: () -> Unit,
+    onCanvas: () -> Unit,
     onGrid: () -> Unit,
     onLayers: () -> Unit,
-    onToggleVideo: () -> Unit,
+    onCamera: () -> Unit,
     onZoomIn: () -> Unit,
     onZoomOut: () -> Unit,
     onZoomReset: () -> Unit
@@ -772,17 +804,14 @@ private fun PreviewSideBar(
         modifier
             .padding(6.dp)
             .clip(RoundedCornerShape(18.dp))
-            .background(Color(0x88000000)),
+            .background(Color(0x99000000)),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        IconBtn(Icons.Outlined.AspectRatio, onAspect, tint = white)
+        IconBtn(Icons.Outlined.RoundedCorner, onCanvas, tint = white)
         IconBtn(Icons.Outlined.GridOn, onGrid, tint = if (gridOn) c.accent else white)
         IconBtn(Icons.Outlined.Layers, onLayers, tint = white)
-        IconBtn(
-            if (videoHidden) Icons.Outlined.VideocamOff else Icons.Outlined.Videocam,
-            onToggleVideo,
-            tint = white
-        )
+        // 3D camera view on/off (Step 10 me kaam karega)
+        IconBtn(Icons.Outlined.VideocamOff, onCamera, tint = Color(0xFF9A9AB0))
         Spacer(Modifier.height(6.dp))
         IconBtn(Icons.Outlined.Add, onZoomIn, tint = white, size = 20.dp)
         Text(

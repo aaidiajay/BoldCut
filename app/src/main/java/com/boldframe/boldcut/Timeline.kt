@@ -70,6 +70,16 @@ import kotlin.math.roundToInt
 const val BASE_DP_PER_SEC = 50f
 const val MIN_DPS = 0.2f
 const val MAX_DPS = 600f
+
+// Compose ek view ki width ~262k px se zyada represent nahi kar sakta, isliye timeline ki
+// total width ko is limit ke andar rakhte hain (lambe video me max zoom utna hi hota hai)
+const val MAX_TIMELINE_PX = 150_000f
+
+fun clampDps(dps: Float, totalMs: Long, density: Float): Float {
+    val maxByWidth = if (totalMs > 0L) MAX_TIMELINE_PX / (density * (totalMs / 1000f)) else MAX_DPS
+    val hi = maxOf(minOf(MAX_DPS, maxByWidth), MIN_DPS)
+    return dps.coerceIn(MIN_DPS, hi)
+}
 private val RULER_STEPS = doubleArrayOf(0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0, 1800.0, 3600.0)
 private const val TILE_DP = 90f
 private const val MAX_FRAMES = 150
@@ -120,13 +130,14 @@ fun Timeline(
     onMarkerClick: (Marker) -> Unit
 ) {
     val density = LocalDensity.current
-    val pxPerMs = with(density) { dpPerSec.dp.toPx() } / 1000f
+    val totalMs = clips.sumOf { it.lengthMs }
+    val dps = clampDps(dpPerSec, totalMs, density.density)
+    val pxPerMs = with(density) { dps.dp.toPx() } / 1000f
     val dragged by scrollState.interactionSource.collectIsDraggedAsState()
     val playingNow by rememberUpdatedState(playing)
     val posNow by rememberUpdatedState(posMs)
     val seek by rememberUpdatedState(onSeek)
     val zoom by rememberUpdatedState(onZoom)
-    val totalMs = clips.sumOf { it.lengthMs }
     val pal = Bc.c
 
     LaunchedEffect(dragged) { if (dragged) onUserDrag() }
@@ -181,7 +192,7 @@ fun Timeline(
                     Box(Modifier.width(totalDp).height(28.dp)) {
                         Ruler(
                             totalMs, Modifier.fillMaxSize(), pal.tick, pal.muted,
-                            dpPerSec, scrollState, viewPx / 2f, viewPx
+                            dps, scrollState, viewPx / 2f, viewPx
                         )
                         markers.filter { it.timeMs <= totalMs }.forEach { m ->
                             Box(
