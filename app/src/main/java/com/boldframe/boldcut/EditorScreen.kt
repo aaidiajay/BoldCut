@@ -9,7 +9,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -17,11 +19,14 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.Button
@@ -40,12 +45,17 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -66,18 +76,27 @@ import kotlin.math.roundToInt
 private fun fmt(ms: Long): String =
     String.format(Locale.US, "%02d:%02d", ms / 60000, (ms / 1000) % 60)
 
-// Bottom tool tabs. step = kis step me kaam karega
-private enum class ToolTab(val label: String, val icon: ImageVector, val step: Int?) {
+// Bottom tool tabs (reference jaisa poora list). step = kis step me kaam karega
+private enum class ToolTab(val label: String, val icon: ImageVector, val step: Int?, val ai: Boolean = false) {
     Edit("Edit", Icons.Outlined.ContentCut, null),
     Media("Media", Icons.Outlined.PermMedia, null),
     Audio("Audio", Icons.Outlined.MusicNote, 11),
     Text("Text", Icons.Outlined.TextFields, 11),
+    Effects("Effects", Icons.Outlined.AutoAwesome, 12),
+    Overlay("Overlay", Icons.Outlined.Layers, 9),
+    Captions("Captions", Icons.Outlined.Subtitles, 14),
+    Filters("Filters", Icons.Outlined.FilterVintage, 12),
+    Adjust("Adjust", Icons.Outlined.Tune, 12),
+    Stickers("Stickers", Icons.Outlined.StickyNote2, 9),
     Shape("Shape", Icons.Outlined.Category, 9),
-    Element("Element", Icons.Outlined.EmojiEmotions, 9),
-    Template("Template", Icons.Outlined.ViewQuilt, 14),
     Draw("Freehand", Icons.Outlined.Gesture, 9),
     Vector("Vector", Icons.Outlined.Create, 9),
-    Effects("Effects", Icons.Outlined.AutoAwesome, 12)
+    Generate("Generate", Icons.Outlined.CreateNewFolder, 14, true),
+    Avatar("AI avatar", Icons.Outlined.Face, 14, true),
+    Transcript("Transcript", Icons.Outlined.Article, 14),
+    Aspect("Aspect", Icons.Outlined.AspectRatio, 8),
+    Background("Background", Icons.Outlined.Texture, 8),
+    Template("Templates", Icons.Outlined.ViewQuilt, 14)
 }
 
 @Composable
@@ -105,7 +124,12 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
     var tab by remember { mutableStateOf(ToolTab.Edit) }
     var showExport by remember { mutableStateOf(false) }
     var showSpeed by remember { mutableStateOf(false) }
-    var gridMode by remember { mutableStateOf(GridMode.OFF) }
+    var grid by remember { mutableStateOf(GridConfig()) }
+    var showGrid by remember { mutableStateOf(false) }
+    var pz by remember { mutableStateOf(1f) }
+    var pan by remember { mutableStateOf(Offset.Zero) }
+    var videoHidden by remember { mutableStateOf(false) }
+    val screenWdp = LocalConfiguration.current.screenWidthDp
     var videoSize by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var exportSettings by remember { mutableStateOf(ExportSettings()) }
     val thumbKey = remember { arrayOf<String?>(null) }
@@ -120,7 +144,17 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
     fun totalMs(): Long = clips.sumOf { it.lengthMs }
 
     fun zoomBy(f: Float) {
-        dpPerSec = (dpPerSec * f).coerceIn(8f, 400f)
+        dpPerSec = (dpPerSec * f).coerceIn(MIN_DPS, MAX_DPS)
+    }
+
+    // Poora project screen me fit karo
+    fun fitZoom() {
+        val sec = totalMs() / 1000f
+        if (sec <= 0f) {
+            toast("Pehle video add karo")
+            return
+        }
+        dpPerSec = (screenWdp * 0.85f / sec).coerceIn(MIN_DPS, MAX_DPS)
     }
 
     // ---- Project save ----
@@ -463,36 +497,70 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
             Spacer(Modifier.width(8.dp))
         }
 
-        // Preview + grid
-        Box(
-            Modifier.weight(1f).fillMaxWidth().background(c.previewBg),
-            contentAlignment = Alignment.Center
-        ) {
-            AndroidView(
-                modifier = Modifier.fillMaxSize(),
-                factory = { ctxView ->
-                    PlayerView(ctxView).apply {
-                        this.player = player
-                        useController = false
+        // Preview: zoom/pan + grid + right side toolbar
+        BoxWithConstraints(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .background(c.previewBg)
+                .clipToBounds()
+                .pointerInput(Unit) {
+                    detectTransformGestures { _, panChange, zoomChange, _ ->
+                        pz = (pz * zoomChange).coerceIn(0.25f, 4f)
+                        pan = if (pz > 1f) pan + panChange else Offset.Zero
                     }
                 }
-            )
+        ) {
+            val boxW = maxWidth
+            val boxH = maxHeight
             val vs = videoSize
             val aspect = if (vs != null) vs.first.toFloat() / vs.second.toFloat() else 16f / 9f
-            GridOverlay(gridMode, aspect, Modifier.fillMaxSize())
-            if (clips.isEmpty()) {
-                Text("Preview yahan dikhega", color = c.muted, fontSize = 14.sp)
+            Box(
+                Modifier
+                    .align(Alignment.Center)
+                    .requiredSize(boxW * pz, boxH * pz)
+                    .offset { IntOffset(pan.x.roundToInt(), pan.y.roundToInt()) }
+            ) {
+                if (!videoHidden) {
+                    AndroidView(
+                        modifier = Modifier.fillMaxSize(),
+                        factory = { ctxView ->
+                            PlayerView(ctxView).apply {
+                                this.player = player
+                                useController = false
+                            }
+                        }
+                    )
+                }
+                GridOverlay(grid, aspect, Modifier.fillMaxSize())
             }
-            Box(Modifier.align(Alignment.TopEnd).padding(6.dp)) {
-                IconBtn(
-                    Icons.Outlined.GridOn,
-                    onClick = {
-                        gridMode = GridMode.values()[(gridMode.ordinal + 1) % GridMode.values().size]
-                        toast(gridMode.label)
-                    },
-                    tint = if (gridMode == GridMode.OFF) Color(0xCCFFFFFF) else c.accent
+            if (clips.isEmpty()) {
+                Text(
+                    "Preview yahan dikhega",
+                    color = c.muted,
+                    fontSize = 14.sp,
+                    modifier = Modifier.align(Alignment.Center)
                 )
             }
+            PreviewSideBar(
+                modifier = Modifier.align(Alignment.CenterEnd),
+                zoomPct = (pz * 100).roundToInt(),
+                gridOn = grid.enabled,
+                videoHidden = videoHidden,
+                onAspect = { toast("Aspect ratio Step 8 me") },
+                onGrid = { showGrid = true },
+                onLayers = { toast("Layers panel Step 9 me") },
+                onToggleVideo = { videoHidden = !videoHidden },
+                onZoomIn = { pz = (pz * 1.25f).coerceIn(0.25f, 4f) },
+                onZoomOut = {
+                    pz = (pz / 1.25f).coerceIn(0.25f, 4f)
+                    if (pz <= 1f) pan = Offset.Zero
+                },
+                onZoomReset = {
+                    pz = 1f
+                    pan = Offset.Zero
+                }
+            )
         }
 
         // Transport row
@@ -535,6 +603,8 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
             scrollState = scrollState,
             dpPerSec = dpPerSec,
             onZoom = { zoomBy(it) },
+            onFit = { fitZoom() },
+            onAdd = { addVideo() },
             onSelect = { selectedId = if (selectedId == it) null else it },
             onSeek = { ms ->
                 posMs = ms
@@ -563,12 +633,27 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
                         val sel = t == tab
                         Column(
                             Modifier
-                                .width(72.dp)
+                                .width(76.dp)
                                 .clickable { tab = t }
                                 .padding(top = 8.dp, bottom = 4.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            BcIcon(t.icon, tint = if (sel) c.accent else c.muted, size = 24.dp)
+                            Box {
+                                BcIcon(t.icon, tint = if (sel) c.accent else c.muted, size = 24.dp)
+                                if (t.ai) {
+                                    Text(
+                                        "AI",
+                                        fontSize = 8.sp,
+                                        color = Color.Black,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier
+                                            .align(Alignment.TopEnd)
+                                            .offset(x = 8.dp, y = (-4).dp)
+                                            .background(Color(0xFF3DE0FF), RoundedCornerShape(4.dp))
+                                            .padding(horizontal = 3.dp)
+                                    )
+                                }
+                            }
                             Spacer(Modifier.height(2.dp))
                             Text(
                                 t.label,
@@ -615,6 +700,11 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
         }
     }
 
+    // ---- Grid sheet ----
+    if (showGrid) {
+        GridSheet(grid, onChange = { grid = it }, onDismiss = { showGrid = false })
+    }
+
     // ---- Speed sheet ----
     if (showSpeed && selClip != null) {
         SpeedSheet(
@@ -659,5 +749,49 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
         )
         is ExportState.Failed -> ExportFailedDialog(st.message, onClose = { runner.reset() })
         else -> {}
+    }
+}
+
+@Composable
+private fun PreviewSideBar(
+    modifier: Modifier,
+    zoomPct: Int,
+    gridOn: Boolean,
+    videoHidden: Boolean,
+    onAspect: () -> Unit,
+    onGrid: () -> Unit,
+    onLayers: () -> Unit,
+    onToggleVideo: () -> Unit,
+    onZoomIn: () -> Unit,
+    onZoomOut: () -> Unit,
+    onZoomReset: () -> Unit
+) {
+    val c = Bc.c
+    val white = Color(0xE6FFFFFF)
+    Column(
+        modifier
+            .padding(6.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(Color(0x88000000)),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        IconBtn(Icons.Outlined.AspectRatio, onAspect, tint = white)
+        IconBtn(Icons.Outlined.GridOn, onGrid, tint = if (gridOn) c.accent else white)
+        IconBtn(Icons.Outlined.Layers, onLayers, tint = white)
+        IconBtn(
+            if (videoHidden) Icons.Outlined.VideocamOff else Icons.Outlined.Videocam,
+            onToggleVideo,
+            tint = white
+        )
+        Spacer(Modifier.height(6.dp))
+        IconBtn(Icons.Outlined.Add, onZoomIn, tint = white, size = 20.dp)
+        Text(
+            "$zoomPct%",
+            color = white,
+            fontSize = 11.sp,
+            modifier = Modifier.clickable(onClick = onZoomReset).padding(vertical = 4.dp, horizontal = 4.dp)
+        )
+        IconBtn(Icons.Outlined.Remove, onZoomOut, tint = white, size = 20.dp)
+        Spacer(Modifier.height(4.dp))
     }
 }

@@ -8,6 +8,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -24,6 +25,8 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -38,6 +41,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -47,79 +51,11 @@ import kotlin.math.log10
 import kotlin.math.pow
 import kotlin.math.roundToInt
 
-// ---------------- Grid overlay ----------------
-
-enum class GridMode(val label: String) {
-    OFF("Grid off"),
-    THIRDS("Rule of thirds"),
-    CENTER("Center lines"),
-    GRID4("4×4 grid"),
-    SAFE("Safe zones")
-}
+// ---------------- Bottom sheet helper ----------------
 
 @Composable
-fun GridOverlay(mode: GridMode, aspect: Float, modifier: Modifier) {
-    if (mode == GridMode.OFF) return
-    Canvas(modifier) {
-        val boxW = size.width
-        val boxH = size.height
-        var w = boxW
-        var h = w / aspect
-        if (h > boxH) {
-            h = boxH
-            w = h * aspect
-        }
-        val left = (boxW - w) / 2f
-        val top = (boxH - h) / 2f
-        val col = Color(0xAAFFFFFF)
-        val sw = 1.dp.toPx()
-
-        fun vline(f: Float) =
-            drawLine(col, Offset(left + w * f, top), Offset(left + w * f, top + h), sw)
-
-        fun hline(f: Float) =
-            drawLine(col, Offset(left, top + h * f), Offset(left + w, top + h * f), sw)
-
-        when (mode) {
-            GridMode.THIRDS -> {
-                vline(1f / 3f); vline(2f / 3f)
-                hline(1f / 3f); hline(2f / 3f)
-            }
-            GridMode.CENTER -> {
-                vline(0.5f); hline(0.5f)
-            }
-            GridMode.GRID4 -> {
-                for (i in 1..3) {
-                    vline(i / 4f)
-                    hline(i / 4f)
-                }
-            }
-            GridMode.SAFE -> {
-                drawRect(
-                    col,
-                    topLeft = Offset(left + w * 0.05f, top + h * 0.05f),
-                    size = Size(w * 0.9f, h * 0.9f),
-                    style = Stroke(sw)
-                )
-                drawRect(
-                    col,
-                    topLeft = Offset(left + w * 0.10f, top + h * 0.10f),
-                    size = Size(w * 0.8f, h * 0.8f),
-                    style = Stroke(sw)
-                )
-            }
-            GridMode.OFF -> {}
-        }
-    }
-}
-
-// ---------------- Speed sheet ----------------
-
-@Composable
-fun SpeedSheet(initial: Float, onApply: (Float) -> Unit, onDismiss: () -> Unit) {
+fun BottomSheetDialog(onDismiss: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
     val c = Bc.c
-    var speed by remember { mutableStateOf(initial) }
-
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -145,62 +81,202 @@ fun SpeedSheet(initial: Float, onApply: (Float) -> Unit, onDismiss: () -> Unit) 
                         onClick = {}
                     )
             ) {
-                Column(Modifier.padding(horizontal = 20.dp, vertical = 20.dp)) {
-                    Text("Speed", color = c.text, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        String.format(Locale.US, "%.2fx", speed),
-                        color = c.accent,
-                        fontSize = 34.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Slider(
-                        value = log10(speed),
-                        onValueChange = {
-                            val v = 10f.pow(it)
-                            speed = ((v * 20f).roundToInt() / 20f).coerceIn(0.1f, 10f)
-                        },
-                        valueRange = -1f..1f,
-                        colors = SliderDefaults.colors(
-                            thumbColor = c.accent,
-                            activeTrackColor = c.accent
-                        )
-                    )
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text("0.1x", color = c.muted, fontSize = 11.sp)
-                        Text("1x", color = c.muted, fontSize = 11.sp)
-                        Text("10x", color = c.muted, fontSize = 11.sp)
-                    }
-                    Spacer(Modifier.height(12.dp))
-                    Row(
-                        Modifier.horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        listOf(0.25f, 0.5f, 0.75f, 1f, 1.5f, 2f, 3f, 5f, 10f).forEach { v ->
-                            val label = if (v == v.toInt().toFloat()) "${v.toInt()}x" else "${v}x"
-                            OptChip(label, speed == v) { speed = v }
-                        }
-                    }
-                    Spacer(Modifier.height(16.dp))
-                    Button(
-                        onClick = { onApply(speed) },
-                        modifier = Modifier.fillMaxWidth().height(50.dp),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = c.accent,
-                            contentColor = c.onAccent
-                        )
-                    ) { Text("Apply", fontSize = 16.sp, fontWeight = FontWeight.Bold) }
-                }
+                Column(
+                    Modifier.padding(horizontal = 20.dp, vertical = 20.dp),
+                    content = content
+                )
             }
         }
     }
 }
 
-// ---------------- Clip toolbar (clip select karne par) ----------------
+// ---------------- Grid ----------------
+
+data class GridConfig(
+    val enabled: Boolean = false,
+    val cols: Int = 3,
+    val rows: Int = 3,
+    val center: Boolean = false,
+    val safe: Boolean = false,
+    val opacity: Float = 0.65f
+)
+
+@Composable
+fun GridOverlay(cfg: GridConfig, aspect: Float, modifier: Modifier) {
+    if (!cfg.enabled) return
+    Canvas(modifier) {
+        val boxW = size.width
+        val boxH = size.height
+        var w = boxW
+        var h = w / aspect
+        if (h > boxH) {
+            h = boxH
+            w = h * aspect
+        }
+        val left = (boxW - w) / 2f
+        val top = (boxH - h) / 2f
+        val col = Color.White.copy(alpha = cfg.opacity)
+        val accent = Color(0xFFFFC107).copy(alpha = cfg.opacity)
+        val sw = 1.dp.toPx()
+
+        fun vline(f: Float, c: Color) =
+            drawLine(c, Offset(left + w * f, top), Offset(left + w * f, top + h), sw)
+
+        fun hline(f: Float, c: Color) =
+            drawLine(c, Offset(left, top + h * f), Offset(left + w, top + h * f), sw)
+
+        for (i in 1 until cfg.cols) vline(i / cfg.cols.toFloat(), col)
+        for (i in 1 until cfg.rows) hline(i / cfg.rows.toFloat(), col)
+        if (cfg.center) {
+            vline(0.5f, accent)
+            hline(0.5f, accent)
+        }
+        if (cfg.safe) {
+            drawRect(
+                accent,
+                topLeft = Offset(left + w * 0.05f, top + h * 0.05f),
+                size = Size(w * 0.9f, h * 0.9f),
+                style = Stroke(sw)
+            )
+            drawRect(
+                accent,
+                topLeft = Offset(left + w * 0.10f, top + h * 0.10f),
+                size = Size(w * 0.8f, h * 0.8f),
+                style = Stroke(sw)
+            )
+        }
+        // Frame ki outline
+        drawRect(col, topLeft = Offset(left, top), size = Size(w, h), style = Stroke(sw))
+    }
+}
+
+@Composable
+private fun Stepper(label: String, value: Int, min: Int, max: Int, onChange: (Int) -> Unit) {
+    val c = Bc.c
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, color = c.text, fontSize = 15.sp, modifier = Modifier.weight(1f))
+        IconBtn(Icons.Outlined.Remove, onClick = { onChange((value - 1).coerceAtLeast(min)) })
+        Text(
+            "$value",
+            color = c.text,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.width(40.dp)
+        )
+        IconBtn(Icons.Outlined.Add, onClick = { onChange((value + 1).coerceAtMost(max)) })
+    }
+}
+
+@Composable
+private fun SwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    val c = Bc.c
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, color = c.text, fontSize = 15.sp, modifier = Modifier.weight(1f))
+        Switch(
+            checked = checked,
+            onCheckedChange = onChange,
+            colors = SwitchDefaults.colors(checkedTrackColor = c.accent, checkedThumbColor = c.onAccent)
+        )
+    }
+}
+
+@Composable
+fun GridSheet(cfg: GridConfig, onChange: (GridConfig) -> Unit, onDismiss: () -> Unit) {
+    val c = Bc.c
+    BottomSheetDialog(onDismiss) {
+        Text("Grid", color = c.text, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        SwitchRow("Grid dikhao", cfg.enabled) { onChange(cfg.copy(enabled = it)) }
+
+        Label("PRESETS")
+        Row(
+            Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            listOf(2 to 2, 3 to 3, 4 to 4, 6 to 6, 8 to 8, 16 to 9).forEach { (cl, rw) ->
+                OptChip("$cl×$rw", cfg.cols == cl && cfg.rows == rw) {
+                    onChange(cfg.copy(enabled = true, cols = cl, rows = rw))
+                }
+            }
+        }
+
+        Label("CUSTOM")
+        Stepper("Columns", cfg.cols, 1, 32) { onChange(cfg.copy(enabled = true, cols = it)) }
+        Stepper("Rows", cfg.rows, 1, 32) { onChange(cfg.copy(enabled = true, rows = it)) }
+
+        Spacer(Modifier.height(4.dp))
+        SwitchRow("Center cross", cfg.center) { onChange(cfg.copy(center = it, enabled = true)) }
+        SwitchRow("Safe zones", cfg.safe) { onChange(cfg.copy(safe = it, enabled = true)) }
+
+        Label("OPACITY")
+        Slider(
+            value = cfg.opacity,
+            onValueChange = { onChange(cfg.copy(opacity = it)) },
+            valueRange = 0.1f..1f,
+            colors = SliderDefaults.colors(thumbColor = c.accent, activeTrackColor = c.accent)
+        )
+        Spacer(Modifier.height(8.dp))
+        Button(
+            onClick = onDismiss,
+            modifier = Modifier.fillMaxWidth().height(48.dp),
+            shape = RoundedCornerShape(16.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = c.accent, contentColor = c.onAccent)
+        ) { Text("Done", fontSize = 16.sp, fontWeight = FontWeight.Bold) }
+    }
+}
+
+// ---------------- Speed sheet ----------------
+
+@Composable
+fun SpeedSheet(initial: Float, onApply: (Float) -> Unit, onDismiss: () -> Unit) {
+    val c = Bc.c
+    var speed by remember { mutableStateOf(initial) }
+
+    BottomSheetDialog(onDismiss) {
+        Text("Speed", color = c.text, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(8.dp))
+        Text(
+            String.format(Locale.US, "%.2fx", speed),
+            color = c.accent,
+            fontSize = 34.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Slider(
+            value = log10(speed),
+            onValueChange = {
+                val v = 10f.pow(it)
+                speed = ((v * 20f).roundToInt() / 20f).coerceIn(0.1f, 10f)
+            },
+            valueRange = -1f..1f,
+            colors = SliderDefaults.colors(thumbColor = c.accent, activeTrackColor = c.accent)
+        )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("0.1x", color = c.muted, fontSize = 11.sp)
+            Text("1x", color = c.muted, fontSize = 11.sp)
+            Text("10x", color = c.muted, fontSize = 11.sp)
+        }
+        Spacer(Modifier.height(12.dp))
+        Row(
+            Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            listOf(0.25f, 0.5f, 0.75f, 1f, 1.5f, 2f, 3f, 5f, 10f).forEach { v ->
+                val label = if (v == v.toInt().toFloat()) "${v.toInt()}x" else "${v}x"
+                OptChip(label, speed == v) { speed = v }
+            }
+        }
+        Spacer(Modifier.height(16.dp))
+        Button(
+            onClick = { onApply(speed) },
+            modifier = Modifier.fillMaxWidth().height(50.dp),
+            shape = RoundedCornerShape(16.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = c.accent, contentColor = c.onAccent)
+        ) { Text("Apply", fontSize = 16.sp, fontWeight = FontWeight.Bold) }
+    }
+}
+
+// ---------------- Clip toolbar ----------------
 
 @Composable
 fun ClipAction(icon: ImageVector, label: String, onClick: () -> Unit) {

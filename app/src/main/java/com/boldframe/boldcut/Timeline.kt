@@ -55,6 +55,9 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -65,15 +68,38 @@ import kotlin.math.ceil
 import kotlin.math.roundToInt
 
 const val BASE_DP_PER_SEC = 50f
+const val MIN_DPS = 0.2f
+const val MAX_DPS = 600f
+private val RULER_STEPS = doubleArrayOf(0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0, 1800.0, 3600.0)
 private const val TILE_DP = 90f
 private const val MAX_FRAMES = 150
 private const val MIN_CLIP_MS = 300L
 private val Accent = Color(0xFFFFC107)
 private val MarkerColor = Color(0xFF2EC4B6)
 
+fun timecode(ms: Long): String {
+    val m = ms / 60000
+    val sec = (ms / 1000) % 60
+    val f = (ms % 1000) * 30 / 1000
+    return String.format(Locale.US, "%02d:%02d:%02d", m, sec, f)
+}
+
+private fun rulerLabel(t: Double, major: Double): String {
+    val total = (t * 1000).roundToInt()
+    val h = total / 3600000
+    val m = (total / 60000) % 60
+    val s = (total / 1000) % 60
+    val d = (total % 1000) / 100
+    return when {
+        h > 0 -> String.format(Locale.US, "%d:%02d:%02d", h, m, s)
+        major < 1.0 -> String.format(Locale.US, "%02d:%02d.%d", m, s, d)
+        else -> String.format(Locale.US, "%02d:%02d", m, s)
+    }
+}
+
 /**
  * CapCut-style timeline: playhead beech me fixed, clips scroll hote hain.
- * Do ungliyon se pinch karke zoom (lambi/choti) hota hai.
+ * Pinch se zoom, neeche-left me zoom +/- aur fit button, upar ruler me timecode.
  */
 @Composable
 fun Timeline(
@@ -85,6 +111,8 @@ fun Timeline(
     scrollState: ScrollState,
     dpPerSec: Float,
     onZoom: (Float) -> Unit,
+    onFit: () -> Unit,
+    onAdd: () -> Unit,
     onSelect: (Long) -> Unit,
     onSeek: (Long) -> Unit,
     onUserDrag: () -> Unit,
@@ -123,7 +151,7 @@ fun Timeline(
     BoxWithConstraints(
         Modifier
             .fillMaxWidth()
-            .height(104.dp)
+            .height(124.dp)
             .background(pal.timelineBg)
             .pointerInput(Unit) {
                 // Do ungliyon ka pinch: Initial pass me dekhte hain taaki scroll se na takraye
@@ -144,13 +172,17 @@ fun Timeline(
             }
     ) {
         val half = maxWidth / 2
+        val viewPx = with(density) { maxWidth.toPx() }
         Box(Modifier.fillMaxSize()) {
             Row(Modifier.horizontalScroll(scrollState)) {
                 Spacer(Modifier.width(half))
                 Column {
                     val totalDp = with(density) { (totalMs * pxPerMs).toDp() }
-                    Box(Modifier.width(totalDp).height(22.dp)) {
-                        Ruler(totalMs, Modifier.fillMaxSize(), pal.tick, dpPerSec)
+                    Box(Modifier.width(totalDp).height(28.dp)) {
+                        Ruler(
+                            totalMs, Modifier.fillMaxSize(), pal.tick, pal.muted,
+                            dpPerSec, scrollState, viewPx / 2f, viewPx
+                        )
                         markers.filter { it.timeMs <= totalMs }.forEach { m ->
                             Box(
                                 Modifier
@@ -202,14 +234,39 @@ fun Timeline(
                     .background(pal.text)
             )
 
-            // Zoom buttons
+            // Timecode pill (playhead ke neeche)
+            Text(
+                timecode(posMs),
+                color = pal.text,
+                fontSize = 12.sp,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 8.dp)
+                    .background(pal.surface2, RoundedCornerShape(8.dp))
+                    .padding(horizontal = 10.dp, vertical = 4.dp)
+            )
+
+            // Zoom controls (neeche-left)
             Row(
-                Modifier.align(Alignment.TopEnd).padding(4.dp),
-                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp)
+                Modifier.align(Alignment.BottomStart).padding(8.dp),
+                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp)
             ) {
-                ZoomBtn(Icons.Outlined.ZoomOut) { onZoom(0.7f) }
-                ZoomBtn(Icons.Outlined.ZoomIn) { onZoom(1.4f) }
+                ZoomBtn(Icons.Outlined.ZoomOut) { onZoom(0.6f) }
+                ZoomBtn(Icons.Outlined.ZoomIn) { onZoom(1.6f) }
+                ZoomBtn(Icons.Outlined.FitScreen) { onFit() }
             }
+
+            // Add (+) button
+            Box(
+                Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(8.dp)
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(pal.accent)
+                    .clickable(onClick = onAdd),
+                contentAlignment = Alignment.Center
+            ) { BcIcon(Icons.Outlined.Add, tint = pal.onAccent, size = 24.dp) }
         }
     }
 }
@@ -219,36 +276,51 @@ private fun ZoomBtn(icon: androidx.compose.ui.graphics.vector.ImageVector, onCli
     val pal = Bc.c
     Box(
         Modifier
-            .size(28.dp)
+            .size(30.dp)
             .clip(CircleShape)
-            .background(pal.surface.copy(alpha = 0.8f))
+            .background(pal.surface2)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) { BcIcon(icon, tint = pal.text, size = 18.dp) }
 }
 
+/** Ruler: sirf screen par dikhne wale ticks aur timecode draw hote hain. */
 @Composable
-private fun Ruler(totalMs: Long, modifier: Modifier, tick: Color, dpPerSec: Float) {
-    // Zoom ke hisaab se tick ki ginti badalti hai
-    val stepSec = when {
-        dpPerSec >= 40f -> 1
-        dpPerSec >= 15f -> 5
-        else -> 10
-    }
+private fun Ruler(
+    totalMs: Long,
+    modifier: Modifier,
+    tick: Color,
+    labelColor: Color,
+    dpPerSec: Float,
+    scroll: ScrollState,
+    halfPx: Float,
+    viewPx: Float
+) {
+    val measurer = rememberTextMeasurer()
+    val style = remember(labelColor) { TextStyle(color = labelColor, fontSize = 9.sp) }
+    val major = RULER_STEPS.firstOrNull { it * dpPerSec >= 70.0 } ?: 3600.0
     Canvas(modifier) {
-        val secs = (totalMs / 1000).toInt()
-        val pxSec = dpPerSec.dp.toPx()
-        var s = 0
-        while (s <= secs) {
-            val x = s * pxSec
-            val h = if (s % (stepSec * 5) == 0) size.height * 0.7f else size.height * 0.35f
-            drawLine(
-                tick,
-                Offset(x, size.height - h),
-                Offset(x, size.height),
-                1.dp.toPx()
-            )
-            s += stepSec
+        val pxSec = dpPerSec.dp.toPx().toDouble()
+        val minor = major / 5.0
+        val startPx = (scroll.value - halfPx).toDouble()
+        val firstI = maxOf(0, kotlin.math.floor(startPx / pxSec / minor).toInt() - 1)
+        val lastI = kotlin.math.ceil((startPx + viewPx) / pxSec / minor).toInt() + 1
+        val totalSec = totalMs / 1000.0
+        for (i in firstI..lastI) {
+            val t = i * minor
+            if (t > totalSec + 1e-6) break
+            val x = (t * pxSec).toFloat()
+            val isMajor = i % 5 == 0
+            val h = if (isMajor) size.height * 0.45f else size.height * 0.22f
+            drawLine(tick, Offset(x, size.height - h), Offset(x, size.height), 1.dp.toPx())
+            if (isMajor) {
+                drawText(
+                    measurer,
+                    rulerLabel(t, major),
+                    topLeft = Offset(x + 3.dp.toPx(), 1.dp.toPx()),
+                    style = style
+                )
+            }
         }
     }
 }
