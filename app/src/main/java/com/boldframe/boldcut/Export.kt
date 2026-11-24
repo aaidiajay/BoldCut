@@ -164,7 +164,8 @@ class ExportRunner(private val ctx: Context, private val scope: CoroutineScope) 
                 .setEffects(Effects(afx, vfx))
                 .build()
         }
-        val composition = Composition.Builder(EditedMediaItemSequence(items)).build()
+        val sequence = EditedMediaItemSequence.Builder(*items.toTypedArray()).build()
+        val composition = Composition.Builder(sequence).build()
 
         val encoderFactory = DefaultEncoderFactory.Builder(ctx)
             .setRequestedVideoEncoderSettings(
