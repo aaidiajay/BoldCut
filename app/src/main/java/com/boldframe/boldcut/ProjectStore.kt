@@ -101,6 +101,16 @@ class ProjectStore(ctx: Context) {
             co.put("trimStartMs", c.trimStartMs)
             co.put("trimEndMs", c.trimEndMs)
             co.put("speed", c.speed.toDouble())
+            val t = c.transform
+            val to = JSONObject()
+            to.put("x", t.x.toDouble())
+            to.put("y", t.y.toDouble())
+            to.put("sx", t.scaleX.toDouble())
+            to.put("sy", t.scaleY.toDouble())
+            to.put("rot", t.rotation.toDouble())
+            to.put("kx", t.skewX.toDouble())
+            to.put("ky", t.skewY.toDouble())
+            co.put("transform", to)
             ca.put(co)
         }
         o.put("clips", ca)
@@ -126,7 +136,18 @@ class ProjectStore(ctx: Context) {
                 c.getLong("durationMs"),
                 c.getLong("trimStartMs"),
                 c.getLong("trimEndMs"),
-                c.optDouble("speed", 1.0).toFloat()
+                c.optDouble("speed", 1.0).toFloat(),
+                c.optJSONObject("transform")?.let { t ->
+                    Transform(
+                        t.optDouble("x", 0.0).toFloat(),
+                        t.optDouble("y", 0.0).toFloat(),
+                        t.optDouble("sx", 1.0).toFloat(),
+                        t.optDouble("sy", 1.0).toFloat(),
+                        t.optDouble("rot", 0.0).toFloat(),
+                        t.optDouble("kx", 0.0).toFloat(),
+                        t.optDouble("ky", 0.0).toFloat()
+                    )
+                } ?: Transform()
             )
         }
         val ma = o.optJSONArray("markers") ?: JSONArray()

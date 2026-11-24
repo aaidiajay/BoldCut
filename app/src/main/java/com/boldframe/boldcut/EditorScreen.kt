@@ -2,6 +2,7 @@ package com.boldframe.boldcut
 
 import android.content.Intent
 import android.content.pm.ActivityInfo
+import android.view.LayoutInflater
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -10,6 +11,11 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateRotation
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -41,6 +47,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -67,6 +74,7 @@ import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -136,6 +144,8 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
     var pan by remember { mutableStateOf(Offset.Zero) }
     var showSide by remember { mutableStateOf(false) }
     var fullPreview by remember { mutableStateOf(false) }
+    var showTransform by remember { mutableStateOf(false) }
+    var liveBefore by remember { mutableStateOf<List<Clip>?>(null) }
     var lowQ by remember { mutableStateOf(false) }
     var outlines by remember { mutableStateOf(false) }
     val screenWdp = LocalConfiguration.current.screenWidthDp
@@ -213,6 +223,7 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
 
     BackHandler(onBack = {
         if (fullPreview) setFull(false)
+        else if (showTransform) showTransform = false
         else if (selectedId != null) selectedId = null
         else leave()
     })
@@ -315,7 +326,8 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
     }
 
     LaunchedEffect(Unit) {
-        snapshotFlow { clips }.collect { list ->
+        snapshotFlow { clips.map { it.copy(transform = Transform()) } }.distinctUntilChanged().collect {
+            val list = clips
             if (list.isEmpty()) {
                 player.clearMediaItems()
                 posMs = 0L
@@ -508,7 +520,65 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
         showExport = true
     }
 
+    // ---- Transform editing (live): gesture/slider ke dauran history me entry ek hi baar ----
+    fun setTransform(id: Long, t: Transform) {
+        if (liveBefore == null) liveBefore = clips
+        clips = clips.map { if (it.id == id) it.copy(transform = t) else it }
+    }
+
+    fun endLive() {
+        val b = liveBefore ?: return
+        liveBefore = null
+        if (b != clips) {
+            undoStack = (undoStack + EditState(b, markers)).takeLast(50)
+            redoStack = emptyList()
+        }
+    }
+
+    // Clip ko drag karke order badalna
+    fun reorderClip(id: Long, deltaMs: Long) {
+        val i = clips.indexOfFirst { it.id == id }
+        if (i < 0) return
+        var start = 0L
+        for (k in 0 until i) start += clips[k].lengthMs
+        val me = clips[i]
+        val center = start + me.lengthMs / 2 + deltaMs
+        val others = clips.filterIndexed { idx, _ -> idx != i }
+        var acc = 0L
+        var target = others.size
+        for ((j, o) in others.withIndex()) {
+            if (center < acc + o.lengthMs / 2) {
+                target = j
+                break
+            }
+            acc += o.lengthMs
+        }
+        if (target == i) return
+        val list = others.toMutableList()
+        list.add(target, me)
+        commit(newClips = list)
+    }
+
     val selClip = clips.firstOrNull { it.id == selectedId }
+    val selClipNow by rememberUpdatedState(selClip)
+    val editingTf = showTransform && selClip != null
+    val activeClip: Clip? = run {
+        var s0 = 0L
+        var found: Clip? = null
+        for (cl in clips) {
+            if (posMs < s0 + cl.lengthMs) {
+                found = cl
+                break
+            }
+            s0 += cl.lengthMs
+        }
+        found ?: clips.lastOrNull()
+    }
+    val activeTf = activeClip?.transform ?: Transform()
+
+    LaunchedEffect(selectedId) {
+        if (selectedId == null) showTransform = false
+    }
 
     Column(Modifier.fillMaxSize().background(c.bg)) {
         // Top bar
@@ -550,10 +620,49 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
                 .fillMaxWidth()
                 .background(c.previewBg)
                 .clipToBounds()
-                .pointerInput(Unit) {
-                    detectTransformGestures { _, panChange, zoomChange, _ ->
-                        pz = (pz * zoomChange).coerceIn(0.25f, 4f)
-                        pan = if (pz > 1f) pan + panChange else Offset.Zero
+                .pointerInput(editingTf, selClip?.id) {
+                    if (editingTf) {
+                        // Clip select + Transform panel khula: preview pe ungli se move/scale/rotate
+                        awaitEachGesture {
+                            awaitFirstDown(requireUnconsumed = false)
+                            var any = false
+                            do {
+                                val ev = awaitPointerEvent()
+                                val z = ev.calculateZoom()
+                                val pn = ev.calculatePan()
+                                val rt = ev.calculateRotation()
+                                val cl = selClipNow
+                                if (cl != null && (z != 1f || pn != Offset.Zero || rt != 0f)) {
+                                    val vs0 = videoSize
+                                    val asp = if (vs0 != null) vs0.first.toFloat() / vs0.second.toFloat() else 16f / 9f
+                                    var fw = size.width.toFloat()
+                                    var fh = fw / asp
+                                    if (fh > size.height) {
+                                        fh = size.height.toFloat()
+                                        fw = fh * asp
+                                    }
+                                    val t = cl.transform
+                                    setTransform(
+                                        cl.id,
+                                        t.copy(
+                                            x = t.x + pn.x / fw,
+                                            y = t.y + pn.y / fh,
+                                            scaleX = (t.scaleX * z).coerceIn(0.01f, 50f),
+                                            scaleY = (t.scaleY * z).coerceIn(0.01f, 50f),
+                                            rotation = t.rotation + rt
+                                        )
+                                    )
+                                    any = true
+                                    ev.changes.forEach { it.consume() }
+                                }
+                            } while (ev.changes.any { it.pressed })
+                            if (any) endLive()
+                        }
+                    } else {
+                        detectTransformGestures { _, panChange, zoomChange, _ ->
+                            pz = (pz * zoomChange).coerceIn(0.25f, 4f)
+                            pan = if (pz > 1f) pan + panChange else Offset.Zero
+                        }
                     }
                 }
         ) {
@@ -570,10 +679,18 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
                 AndroidView(
                     modifier = Modifier.fillMaxSize(),
                     factory = { ctxView ->
-                        PlayerView(ctxView).apply {
-                            this.player = player
-                            useController = false
+                        val pv = LayoutInflater.from(ctxView)
+                            .inflate(R.layout.boldcut_player, null, false) as PlayerView
+                        pv.player = player
+                        pv.useController = false
+                        pv.videoSurfaceView?.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+                            (pv.tag as? Transform)?.let { applyPreviewTransform(pv, it) }
                         }
+                        pv
+                    },
+                    update = { v ->
+                        v.tag = activeTf
+                        applyPreviewTransform(v, activeTf)
                     }
                 )
                 GridOverlay(grid, aspect, Modifier.fillMaxSize())
@@ -721,11 +838,23 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
             },
             onUserDrag = { player.pause() },
             onTrim = { id, s, e -> trimClip(id, s, e) },
+            onReorder = { id, d -> reorderClip(id, d) },
             onMarkerClick = { jumpTo(it.timeMs) }
         )
 
         // Clip select ho to uska toolbar, warna tool tabs
-        if (selClip != null) {
+        if (selClip != null && showTransform) {
+            val src = videoSize ?: (1920 to 1080)
+            TransformPanel(
+                clip = selClip,
+                canvasW = src.first,
+                canvasH = src.second,
+                onChange = { setTransform(selClip.id, it) },
+                onEnd = { endLive() },
+                onClose = { showTransform = false },
+                onSoon = { toast(it) }
+            )
+        } else if (selClip != null) {
             ClipBar(
                 clip = selClip,
                 onDone = { selectedId = null },
@@ -733,6 +862,16 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
                 onSplit = { splitAtPlayhead() },
                 onDuplicate = { duplicateSelected() },
                 onDelete = { deleteSelected() },
+                onTransform = {
+                    // Playhead ko clip ke andar le aao, taaki badlav preview me dikhe
+                    var st = 0L
+                    for (cl in clips) {
+                        if (cl.id == selClip.id) break
+                        st += cl.lengthMs
+                    }
+                    if (posMs < st || posMs >= st + selClip.lengthMs) jumpTo(st + 1)
+                    showTransform = true
+                },
                 onSoon = { toast(it) }
             )
         } else {

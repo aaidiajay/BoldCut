@@ -11,6 +11,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
@@ -59,6 +60,8 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.zIndex
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
@@ -127,6 +130,7 @@ fun Timeline(
     onSeek: (Long) -> Unit,
     onUserDrag: () -> Unit,
     onTrim: (Long, Long, Long) -> Unit,
+    onReorder: (Long, Long) -> Unit,
     onMarkerClick: (Marker) -> Unit
 ) {
     val density = LocalDensity.current
@@ -219,7 +223,8 @@ fun Timeline(
                                 selected = clip.id == selectedId,
                                 pxPerMs = pxPerMs,
                                 onClick = { onSelect(clip.id) },
-                                onTrim = onTrim
+                                onTrim = onTrim,
+                                onReorder = onReorder
                             )
                         }
                     }
@@ -341,7 +346,8 @@ private fun ClipBlock(
     selected: Boolean,
     pxPerMs: Float,
     onClick: () -> Unit,
-    onTrim: (Long, Long, Long) -> Unit
+    onTrim: (Long, Long, Long) -> Unit,
+    onReorder: (Long, Long) -> Unit
 ) {
     val ctx = LocalContext.current
     val density = LocalDensity.current
@@ -381,6 +387,12 @@ private fun ClipBlock(
     var pendingLeft by remember(clip.id, clip.trimStartMs, clip.trimEndMs, clip.speed) { mutableLongStateOf(0L) }
     var pendingRight by remember(clip.id, clip.trimStartMs, clip.trimEndMs, clip.speed) { mutableLongStateOf(0L) }
     val curClip by rememberUpdatedState(clip)
+    val pxNow by rememberUpdatedState(pxPerMs)
+    val reorderNow by rememberUpdatedState(onReorder)
+
+    // Long-press karke clip ko aage-peeche drag karo (order badalne ke liye)
+    var dragDx by remember { mutableStateOf(0f) }
+    var dragging by remember { mutableStateOf(false) }
 
     val effLen = clip.lengthMs - pendingLeft + pendingRight
     val widthDp = with(density) { (effLen * pxPerMs).toDp() }
@@ -400,16 +412,37 @@ private fun ClipBlock(
     val shape = RoundedCornerShape(4.dp)
     Box(
         Modifier
+            .zIndex(if (dragging) 1f else 0f)
+            .offset { IntOffset(dragDx.roundToInt(), 0) }
             .width(widthDp)
             .height(56.dp)
             .clip(shape)
             .background(pal.clipBg)
             .border(
-                if (selected) 2.dp else 0.5.dp,
-                if (selected) Accent else pal.stroke,
+                if (selected || dragging) 2.dp else 0.5.dp,
+                if (selected || dragging) Accent else pal.stroke,
                 shape
             )
             .clickable(onClick = onClick)
+            .pointerInput(clip.id) {
+                detectDragGesturesAfterLongPress(
+                    onDragStart = { dragging = true },
+                    onDrag = { change, amount ->
+                        change.consume()
+                        dragDx += amount.x
+                    },
+                    onDragEnd = {
+                        val ms = (dragDx / pxNow).toLong()
+                        dragging = false
+                        dragDx = 0f
+                        if (kotlin.math.abs(ms) > 50L) reorderNow(curClip.id, ms)
+                    },
+                    onDragCancel = {
+                        dragging = false
+                        dragDx = 0f
+                    }
+                )
+            }
     ) {
         Row(
             Modifier

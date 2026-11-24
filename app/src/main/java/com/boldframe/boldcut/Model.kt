@@ -14,13 +14,30 @@ data class Clip(
     val durationMs: Long,
     val trimStartMs: Long = 0L,
     val trimEndMs: Long = durationMs,
-    val speed: Float = 1f
+    val speed: Float = 1f,
+    val transform: Transform = Transform()
 ) {
     // Timeline pe clip ki lambai (speed ke hisaab se)
     val lengthMs: Long get() = ((trimEndMs - trimStartMs) / speed).toLong()
 
     // Source video ki lambai (trim ke baad, speed ke bina)
     val sourceLenMs: Long get() = trimEndMs - trimStartMs
+}
+
+/**
+ * Clip ka transform. x/y frame ki width/height ke fraction me (0 = center),
+ * rotation/skew degrees me.
+ */
+data class Transform(
+    val x: Float = 0f,
+    val y: Float = 0f,
+    val scaleX: Float = 1f,
+    val scaleY: Float = 1f,
+    val rotation: Float = 0f,
+    val skewX: Float = 0f,
+    val skewY: Float = 0f
+) {
+    val isIdentity: Boolean get() = this == Transform()
 }
 
 // Abhi UI ek hi main video track use karta hai; baaki tracks aage Step me.

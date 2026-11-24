@@ -2,6 +2,7 @@ package com.boldframe.boldcut
 
 import android.content.ContentValues
 import android.content.Context
+import android.graphics.Matrix
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
@@ -48,6 +49,7 @@ import androidx.media3.common.audio.SonicAudioProcessor
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.effect.FrameDropEffect
+import androidx.media3.effect.MatrixTransformation
 import androidx.media3.effect.Presentation
 import androidx.media3.effect.SpeedChangeEffect
 import androidx.media3.transformer.Composition
@@ -159,6 +161,12 @@ class ExportRunner(private val ctx: Context, private val scope: CoroutineScope) 
                 vfx.add(SpeedChangeEffect(c.speed))
             }
             vfx.add(Presentation.createForWidthAndHeight(w, h, Presentation.LAYOUT_SCALE_TO_FIT))
+            if (!c.transform.isIdentity) {
+                val tm = c.transform.ndcMatrix(w.toFloat(), h.toFloat())
+                vfx.add(object : MatrixTransformation {
+                    override fun getMatrix(presentationTimeUs: Long): Matrix = tm
+                })
+            }
             vfx.add(FrameDropEffect.createDefaultFrameDropEffect(s.fps.toFloat()))
             EditedMediaItem.Builder(mi)
                 .setEffects(Effects(afx, vfx))

@@ -302,6 +302,7 @@ fun ClipBar(
     onSplit: () -> Unit,
     onDuplicate: () -> Unit,
     onDelete: () -> Unit,
+    onTransform: () -> Unit,
     onSoon: (String) -> Unit
 ) {
     val c = Bc.c
@@ -323,7 +324,7 @@ fun ClipBar(
             ClipAction(Icons.Outlined.ContentCopy, "Duplicate", onDuplicate)
             ClipAction(Icons.Outlined.Delete, "Delete", onDelete)
             ClipAction(Icons.Outlined.VolumeUp, "Volume") { onSoon("Volume Step 11 me") }
-            ClipAction(Icons.Outlined.OpenWith, "Transform") { onSoon("Move & Transform Step 8 me") }
+            ClipAction(Icons.Outlined.OpenWith, "Transform", onTransform)
             ClipAction(Icons.Outlined.Opacity, "Blend") { onSoon("Blending & Opacity Step 9 me") }
             ClipAction(Icons.Outlined.FormatColorFill, "Color") { onSoon("Color & Fill Step 9 me") }
             ClipAction(Icons.Outlined.BorderStyle, "Border") { onSoon("Border & Shadow Step 9 me") }
