@@ -144,7 +144,7 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
     val thumbKey = remember { arrayOf<String?>(null) }
 
     val player = remember {
-        ExoPlayer.Builder(ctx).build().apply {
+        buildPlayer(ctx).apply {
             setSeekParameters(SeekParameters.CLOSEST_SYNC)
         }
     }
@@ -361,16 +361,25 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
         player.trackSelectionParameters = b.build()
     }
 
-    val picker = rememberLauncherForActivityResult(
-        ActivityResultContracts.PickMultipleVisualMedia(20)
-    ) { uris ->
-        if (uris.isNotEmpty()) {
-            scope.launch {
-                val added = importClips(ctx, uris)
-                if (added.isEmpty()) toast("Video load nahi hui") else commit(newClips = clips + added)
+    fun addUris(uris: List<android.net.Uri>) {
+        if (uris.isEmpty()) return
+        scope.launch {
+            val added = importClips(ctx, uris)
+            if (added.isEmpty()) {
+                toast("Ye file load nahi ho payi (format support nahi ya kharab file)")
+            } else {
+                commit(newClips = clips + added)
             }
         }
     }
+
+    val picker = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickMultipleVisualMedia(20)
+    ) { uris -> addUris(uris) }
+
+    val filePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris -> addUris(uris) }
 
     fun addVideo() {
         picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly))
@@ -779,6 +788,7 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
                         }
                         ToolTab.Media -> Row(Modifier.horizontalScroll(rememberScrollState())) {
                             ClipAction(Icons.Outlined.Videocam, "Add video") { addVideo() }
+                            ClipAction(Icons.Outlined.FolderOpen, "From files") { filePicker.launch(arrayOf("*/*")) }
                             ClipAction(Icons.Outlined.Image, "Add photo") { toast("Photo support Step 7 me") }
                             ClipAction(Icons.Outlined.Mic, "Record") { toast("Record aage ke Step me") }
                         }

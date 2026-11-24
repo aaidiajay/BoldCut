@@ -12,8 +12,8 @@ android {
         applicationId = "com.boldframe.boldcut"
         minSdk = 26
         targetSdk = 34
-        versionCode = 12
-        versionName = "0.6.9"
+        versionCode = 13
+        versionName = "0.7.0"
     }
 
     buildTypes {
@@ -48,4 +48,7 @@ dependencies {
     implementation("androidx.media3:media3-common:$media3")
     implementation("androidx.media3:media3-effect:$media3")
     implementation("androidx.media3:media3-transformer:$media3")
+
+    // FFmpeg software decoders (preview me aur codecs chalane ke liye)
+    implementation("io.github.anilbeesetti:nextlib-media3ext:1.7.1-0.9.0")
 }

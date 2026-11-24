@@ -1,5 +1,6 @@
 package com.boldframe.boldcut
 
+import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -106,27 +107,36 @@ fun HomeScreen(refreshTick: Int, onOpen: (String) -> Unit, onOpenSettings: () ->
 
     BackHandler(enabled = tab != 0) { tab = 0 }
 
-    val picker = rememberLauncherForActivityResult(
-        ActivityResultContracts.PickMultipleVisualMedia(30)
-    ) { uris ->
-        if (uris.isNotEmpty()) {
-            scope.launch {
-                busy = true
-                val clips = importClips(ctx, uris)
-                if (clips.isEmpty()) {
-                    busy = false
-                    toast("Video load nahi hui")
-                } else {
-                    val p = withContext(Dispatchers.IO) { store.create(defaultName(), clips) }
-                    busy = false
-                    onOpen(p.id)
-                }
+    fun startImport(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        scope.launch {
+            busy = true
+            val clips = importClips(ctx, uris)
+            if (clips.isEmpty()) {
+                busy = false
+                toast("Ye file load nahi ho payi (format support nahi ya kharab file)")
+            } else {
+                val p = withContext(Dispatchers.IO) { store.create(defaultName(), clips) }
+                busy = false
+                onOpen(p.id)
             }
         }
     }
 
+    val picker = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickMultipleVisualMedia(30)
+    ) { uris -> startImport(uris) }
+
+    val filePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris -> startImport(uris) }
+
     fun newVideo() {
         picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly))
+    }
+
+    fun importFiles() {
+        filePicker.launch(arrayOf("*/*"))
     }
 
     Column(Modifier.fillMaxSize().background(c.bg)) {
@@ -136,6 +146,7 @@ fun HomeScreen(refreshTick: Int, onOpen: (String) -> Unit, onOpenSettings: () ->
                     store = store,
                     projects = projects,
                     onNewVideo = { newVideo() },
+                    onImportFiles = { importFiles() },
                     onEditPhoto = { soon("Edit photo") },
                     onSeeAll = { tab = 2 },
                     onOpen = onOpen,
@@ -255,6 +266,7 @@ private fun EditTab(
     store: ProjectStore,
     projects: List<ProjectMeta>,
     onNewVideo: () -> Unit,
+    onImportFiles: () -> Unit,
     onEditPhoto: () -> Unit,
     onSeeAll: () -> Unit,
     onOpen: (String) -> Unit,
@@ -318,6 +330,23 @@ private fun EditTab(
                         Spacer(Modifier.height(10.dp))
                         Text("Edit photo", color = c.text, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                         Text("jald aayega", color = c.muted, fontSize = 11.sp)
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(c.surface2)
+                        .clickable(onClick = onImportFiles)
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    BcIcon(Icons.Outlined.FolderOpen, tint = c.text, size = 24.dp)
+                    Spacer(Modifier.width(12.dp))
+                    Column {
+                        Text("Files se import", color = c.text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                        Text("MKV, AVI, MOV, WebM... koi bhi format", color = c.muted, fontSize = 11.sp)
                     }
                 }
             }

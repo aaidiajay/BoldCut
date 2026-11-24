@@ -5,8 +5,17 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.DefaultRenderersFactory
+import androidx.media3.exoplayer.ExoPlayer
+import io.github.anilbeesetti.nextlib.media3ext.ffdecoder.NextRenderersFactory
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.coroutines.resume
 
 fun readDurationMs(ctx: Context, uri: Uri): Long {
     val r = MediaMetadataRetriever()
@@ -32,14 +41,58 @@ fun isReadable(ctx: Context, uri: Uri): Boolean =
         ctx.contentResolver.openFileDescriptor(uri, "r")?.use { true } ?: false
     }.getOrDefault(false)
 
-suspend fun importClips(ctx: Context, uris: List<Uri>): List<Clip> =
-    withContext(Dispatchers.IO) {
-        uris.mapNotNull { u ->
-            persistReadAccess(ctx, u)
-            val d = readDurationMs(ctx, u)
-            if (d > 0) Clip(Ids.next(), u, d) else null
-        }
+/** Phone ke decoders + FFmpeg decoders dono wala player (preview/probe ke liye). */
+fun buildPlayer(ctx: Context): ExoPlayer {
+    val rf = NextRenderersFactory(ctx)
+        .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+    return ExoPlayer.Builder(ctx, rf).build()
+}
+
+/** MediaMetadataRetriever jis file ka time na bataye, uska duration player se nikalte hain. */
+suspend fun probeDurationWithPlayer(ctx: Context, uri: Uri): Long =
+    withContext(Dispatchers.Main) {
+        withTimeoutOrNull(12_000L) {
+            suspendCancellableCoroutine<Long> { cont ->
+                val p = buildPlayer(ctx)
+                var finished = false
+                fun finish(v: Long) {
+                    if (!finished) {
+                        finished = true
+                        p.release()
+                        if (cont.isActive) cont.resume(v)
+                    }
+                }
+                p.addListener(object : Player.Listener {
+                    override fun onPlaybackStateChanged(state: Int) {
+                        if (state == Player.STATE_READY) finish(p.duration.coerceAtLeast(0L))
+                    }
+
+                    override fun onPlayerError(error: PlaybackException) {
+                        finish(0L)
+                    }
+                })
+                cont.invokeOnCancellation {
+                    if (!finished) {
+                        finished = true
+                        p.release()
+                    }
+                }
+                p.setMediaItem(MediaItem.fromUri(uri))
+                p.prepare()
+            }
+        } ?: 0L
     }
+
+suspend fun importClips(ctx: Context, uris: List<Uri>): List<Clip> {
+    val out = mutableListOf<Clip>()
+    for (u in uris) {
+        persistReadAccess(ctx, u)
+        var d = withContext(Dispatchers.IO) { readDurationMs(ctx, u) }
+        if (d <= 0L) d = probeDurationWithPlayer(ctx, u)
+        if (d > 0L) out.add(Clip(Ids.next(), u, d))
+    }
+    return out
+}
 
 fun firstFrame(ctx: Context, clip: Clip): Bitmap? {
     val r = MediaMetadataRetriever()
