@@ -144,7 +144,7 @@ class ExportRunner(private val ctx: Context, private val scope: CoroutineScope) 
 
         val sorted = clips.sortedBy { it.startMs }
         val sequenceBuilder =
-            EditedMediaItemSequence.Builder(setOf(C.TRACK_TYPE_AUDIO, C.TRACK_TYPE_VIDEO))
+            EditedMediaItemSequence.Builder()
         var cursor = 0L
         for (c in sorted) {
             val mi = MediaItem.Builder()
