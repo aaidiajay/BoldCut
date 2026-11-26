@@ -130,12 +130,12 @@ fun Timeline(
     onSelect: (Long) -> Unit,
     onSeek: (Long) -> Unit,
     onUserDrag: () -> Unit,
-    onTrim: (Long, Long, Long) -> Unit,
-    onReorder: (Long, Long) -> Unit,
+    onTrim: (Long, Long, Long, Long) -> Unit,
+    onMove: (Long, Long) -> Unit,
     onMarkerClick: (Marker) -> Unit
 ) {
     val density = LocalDensity.current
-    val totalMs = clips.sumOf { it.lengthMs }
+    val totalMs = clips.maxOfOrNull { it.endMs } ?: 0L
     val dps = clampDps(dpPerSec, totalMs, density.density)
     val pxPerMs = with(density) { dps.dp.toPx() } / 1000f
     val dragged by scrollState.interactionSource.collectIsDraggedAsState()
@@ -217,15 +217,19 @@ fun Timeline(
                             }
                         }
                     }
-                    Row {
-                        clips.forEach { clip ->
+                    Box(Modifier.width(totalDp).height(56.dp)) {
+                        clips.forEachIndexed { i, clip ->
+                            val prevEnd = if (i > 0) clips[i - 1].endMs else 0L
+                            val nextStart = if (i < clips.lastIndex) clips[i + 1].startMs else Long.MAX_VALUE / 4
                             ClipBlock(
                                 clip = clip,
                                 selected = clip.id == selectedId,
                                 pxPerMs = pxPerMs,
+                                leftSpaceMs = (clip.startMs - prevEnd).coerceAtLeast(0L),
+                                rightSpaceMs = (nextStart - clip.endMs).coerceAtLeast(0L),
                                 onClick = { onSelect(clip.id) },
                                 onTrim = onTrim,
-                                onReorder = onReorder
+                                onMove = onMove
                             )
                         }
                     }
@@ -346,9 +350,11 @@ private fun ClipBlock(
     clip: Clip,
     selected: Boolean,
     pxPerMs: Float,
+    leftSpaceMs: Long,
+    rightSpaceMs: Long,
     onClick: () -> Unit,
-    onTrim: (Long, Long, Long) -> Unit,
-    onReorder: (Long, Long) -> Unit
+    onTrim: (Long, Long, Long, Long) -> Unit,
+    onMove: (Long, Long) -> Unit
 ) {
     val ctx = LocalContext.current
     val density = LocalDensity.current
@@ -389,7 +395,9 @@ private fun ClipBlock(
     var pendingRight by remember(clip.id, clip.trimStartMs, clip.trimEndMs, clip.speed) { mutableLongStateOf(0L) }
     val curClip by rememberUpdatedState(clip)
     val pxNow by rememberUpdatedState(pxPerMs)
-    val reorderNow by rememberUpdatedState(onReorder)
+    val moveNow by rememberUpdatedState(onMove)
+    val leftSpaceNow by rememberUpdatedState(leftSpaceMs)
+    val rightSpaceNow by rememberUpdatedState(rightSpaceMs)
 
     // Long-press karke clip ko aage-peeche drag karo (order badalne ke liye)
     var dragDx by remember { mutableStateOf(0f) }
@@ -405,7 +413,8 @@ private fun ClipBlock(
             onTrim(
                 c.id,
                 c.trimStartMs + (pendingLeft * c.speed).toLong(),
-                c.trimEndMs + (pendingRight * c.speed).toLong()
+                c.trimEndMs + (pendingRight * c.speed).toLong(),
+                c.startMs + pendingLeft
             )
         }
     }
@@ -414,7 +423,7 @@ private fun ClipBlock(
     Box(
         Modifier
             .zIndex(if (dragging) 1f else 0f)
-            .offset { IntOffset(dragDx.roundToInt(), 0) }
+            .offset { IntOffset(((clip.startMs + pendingLeft) * pxPerMs + dragDx).roundToInt(), 0) }
             .width(widthDp)
             .height(56.dp)
             .clip(shape)
@@ -436,7 +445,7 @@ private fun ClipBlock(
                         val ms = (dragDx / pxNow).toLong()
                         dragging = false
                         dragDx = 0f
-                        if (kotlin.math.abs(ms) > 50L) reorderNow(curClip.id, ms)
+                        if (kotlin.math.abs(ms) > 30L) moveNow(curClip.id, ms)
                     },
                     onDragCancel = {
                         dragging = false
@@ -487,7 +496,7 @@ private fun ClipBlock(
                 onDrag = { dx ->
                     val c = curClip
                     val dMs = (dx / pxPerMs).toLong()
-                    val lo = -(c.trimStartMs / c.speed).toLong()
+                    val lo = -minOf((c.trimStartMs / c.speed).toLong(), leftSpaceNow)
                     val hi = maxOf(c.lengthMs + pendingRight - MIN_CLIP_MS, lo)
                     pendingLeft = (pendingLeft + dMs).coerceIn(lo, hi)
                 },
@@ -498,7 +507,7 @@ private fun ClipBlock(
                 onDrag = { dx ->
                     val c = curClip
                     val dMs = (dx / pxPerMs).toLong()
-                    val hi = ((c.durationMs - c.trimEndMs) / c.speed).toLong()
+                    val hi = minOf(((c.durationMs - c.trimEndMs) / c.speed).toLong(), rightSpaceNow)
                     val lo = minOf(-(c.lengthMs - pendingLeft - MIN_CLIP_MS), hi)
                     pendingRight = (pendingRight + dMs).coerceIn(lo, hi)
                 },

@@ -15,8 +15,11 @@ data class Clip(
     val trimStartMs: Long = 0L,
     val trimEndMs: Long = durationMs,
     val speed: Float = 1f,
-    val transform: Transform = Transform()
+    val transform: Transform = Transform(),
+    val startMs: Long = 0L   // timeline pe clip kahan se shuru hoti hai (beech me khaali jagah ho sakti hai)
 ) {
+    val endMs: Long get() = startMs + lengthMs
+
     // Timeline pe clip ki lambai (speed ke hisaab se)
     val lengthMs: Long get() = ((trimEndMs - trimStartMs) / speed).toLong()
 
@@ -86,3 +89,13 @@ data class ProjectMeta(
     val durationMs: Long,
     val clipCount: Int
 )
+
+/** Clips ko ek ke baad ek rakh do (startAt se). */
+fun layoutSequential(clips: List<Clip>, startAt: Long = 0L): List<Clip> {
+    var cur = startAt
+    return clips.map {
+        val c = it.copy(startMs = cur)
+        cur += c.lengthMs
+        c
+    }
+}

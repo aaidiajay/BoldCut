@@ -27,7 +27,7 @@ class ProjectStore(ctx: Context) {
             .filter { it.extension == "json" }
             .mapNotNull { f -> runCatching { parse(f.readText()) }.getOrNull() }
             .map { p ->
-                ProjectMeta(p.id, p.name, p.modifiedAt, p.clips.sumOf { it.lengthMs }, p.clips.size)
+                ProjectMeta(p.id, p.name, p.modifiedAt, p.clips.maxOfOrNull { it.endMs } ?: 0L, p.clips.size)
             }
             .sortedByDescending { it.modifiedAt }
     }
@@ -101,6 +101,7 @@ class ProjectStore(ctx: Context) {
             co.put("trimStartMs", c.trimStartMs)
             co.put("trimEndMs", c.trimEndMs)
             co.put("speed", c.speed.toDouble())
+            co.put("startMs", c.startMs)
             val t = c.transform
             val to = JSONObject()
             to.put("x", t.x.toDouble())
@@ -147,9 +148,11 @@ class ProjectStore(ctx: Context) {
                         t.optDouble("kx", 0.0).toFloat(),
                         t.optDouble("ky", 0.0).toFloat()
                     )
-                } ?: Transform()
+                } ?: Transform(),
+                c.optLong("startMs", -1L)
             )
         }
+        val clipsFixed = if (clips.any { it.startMs < 0L }) layoutSequential(clips) else clips
         val ma = o.optJSONArray("markers") ?: JSONArray()
         val markers = (0 until ma.length()).map { i ->
             val m = ma.getJSONObject(i)
@@ -160,7 +163,7 @@ class ProjectStore(ctx: Context) {
             o.optString("name", "Project"),
             o.optLong("createdAt", 0L),
             o.optLong("modifiedAt", 0L),
-            clips,
+            clipsFixed,
             markers
         )
     }

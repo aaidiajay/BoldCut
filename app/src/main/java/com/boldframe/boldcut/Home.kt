@@ -111,7 +111,7 @@ fun HomeScreen(refreshTick: Int, onOpen: (String) -> Unit, onOpenSettings: () ->
         if (uris.isEmpty()) return
         scope.launch {
             busy = true
-            val clips = importClips(ctx, uris)
+            val clips = layoutSequential(importClips(ctx, uris))
             if (clips.isEmpty()) {
                 busy = false
                 toast("Ye file load nahi ho payi (format support nahi ya kharab file)")

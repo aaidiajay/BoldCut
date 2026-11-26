@@ -302,6 +302,7 @@ fun ClipBar(
     onSplit: () -> Unit,
     onDuplicate: () -> Unit,
     onDelete: () -> Unit,
+    onRippleDelete: () -> Unit,
     onTransform: () -> Unit,
     onSoon: (String) -> Unit
 ) {
@@ -323,6 +324,7 @@ fun ClipBar(
             ClipAction(Icons.Outlined.VerticalSplit, "Split", onSplit)
             ClipAction(Icons.Outlined.ContentCopy, "Duplicate", onDuplicate)
             ClipAction(Icons.Outlined.Delete, "Delete", onDelete)
+            ClipAction(Icons.Outlined.DeleteSweep, "Ripple del", onRippleDelete)
             ClipAction(Icons.Outlined.VolumeUp, "Volume") { onSoon("Volume Step 11 me") }
             ClipAction(Icons.Outlined.OpenWith, "Transform", onTransform)
             ClipAction(Icons.Outlined.Opacity, "Blend") { onSoon("Blending & Opacity Step 9 me") }

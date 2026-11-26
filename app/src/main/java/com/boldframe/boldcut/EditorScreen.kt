@@ -124,7 +124,7 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
     var loaded by remember { mutableStateOf(false) }
     var clips by remember { mutableStateOf(emptyList<Clip>()) }
     var markers by remember { mutableStateOf(emptyList<Marker>()) }
-    val totalNow = clips.sumOf { it.lengthMs }
+    val totalNow = clips.maxOfOrNull { it.endMs } ?: 0L
     val effDps = clampDps(dpPerSec, totalNow, density.density)
     val pxPerMs = with(density) { effDps.dp.toPx() } / 1000f
     LaunchedEffect(totalNow) {
@@ -156,11 +156,14 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
     val player = remember {
         buildPlayer(ctx).apply {
             setSeekParameters(SeekParameters.CLOSEST_SYNC)
+            // Har clip ke end pe ruko; aage ka kaam hamara controller karta hai (gaps ke liye)
+            setPauseAtEndOfMediaItems(true)
         }
     }
 
     fun toast(msg: String) = Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show()
-    fun totalMs(): Long = clips.sumOf { it.lengthMs }
+    fun totalMs(): Long = clips.maxOfOrNull { it.endMs } ?: 0L
+    val ctrl = remember { intArrayOf(-2) }   // playback controller: pichli baar kaunsi clip pe the
 
     // Full-screen preview: landscape video ho to phone ghuma dete hain
     fun setFull(on: Boolean) {
@@ -211,6 +214,7 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
 
     fun leave() {
         player.pause()
+        playing = false
         val cl = clips
         val mk = markers
         val n = name
@@ -236,7 +240,7 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
             }
             name = p.name
             markers = p.markers
-            clips = ok
+            clips = ok.sortedBy { it.startMs }
             if (missing.isNotEmpty()) {
                 toast("${missing.size} clip ka video gallery me nahi mila, hata diya")
             }
@@ -264,7 +268,7 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
     fun commit(newClips: List<Clip> = clips, newMarkers: List<Marker> = markers) {
         undoStack = (undoStack + EditState(clips, markers)).takeLast(50)
         redoStack = emptyList()
-        clips = newClips
+        clips = newClips.sortedBy { it.startMs }
         markers = newMarkers
     }
 
@@ -289,14 +293,12 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
     // ---- Player helpers (speed ke saath) ----
     // rem = clip ke andar timeline ms; player ko source ms chahiye (rem * speed)
     fun seekGlobal(ms: Long) {
-        var rem = ms.coerceAtLeast(0L)
-        for ((i, cl) in clips.withIndex()) {
-            if (rem < cl.lengthMs || i == clips.lastIndex) {
-                val src = (rem * cl.speed).toLong()
-                player.seekTo(i, src.coerceAtMost((cl.sourceLenMs - 1).coerceAtLeast(0L)))
-                return
-            }
-            rem -= cl.lengthMs
+        ctrl[0] = -2
+        val idx = clips.indexOfFirst { ms >= it.startMs && ms < it.endMs }
+        if (idx >= 0) {
+            val cl = clips[idx]
+            val src = ((ms - cl.startMs) * cl.speed).toLong()
+            player.seekTo(idx, src.coerceIn(0L, (cl.sourceLenMs - 1).coerceAtLeast(0L)))
         }
     }
 
@@ -309,7 +311,7 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
     DisposableEffect(player) {
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
-                playing = isPlaying
+                // 'playing' ab hamara controller sambhalta hai
             }
         }
         player.addListener(listener)
@@ -326,7 +328,7 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
     }
 
     LaunchedEffect(Unit) {
-        snapshotFlow { clips.map { it.copy(transform = Transform()) } }.distinctUntilChanged().collect {
+        snapshotFlow { clips.map { it.copy(transform = Transform(), startMs = 0L) } }.distinctUntilChanged().collect {
             val list = clips
             if (list.isEmpty()) {
                 player.clearMediaItems()
@@ -334,26 +336,56 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
             } else {
                 player.setMediaItems(list.map { it.toMediaItem() })
                 player.prepare()
-                posMs = posMs.coerceAtMost(list.sumOf { it.lengthMs })
+                posMs = posMs.coerceAtMost(list.maxOf { it.endMs })
                 seekGlobal(posMs)
             }
         }
     }
 
-    // Playing ke time global position track karo aur clip ki speed lagao
+    // Playback controller: clips + beech ki khaali jagah (gap) dono sambhalta hai
     LaunchedEffect(Unit) {
+        var last = System.nanoTime()
         while (true) {
             delay(33)
-            if (player.isPlaying) {
-                val idx = player.currentMediaItemIndex.coerceAtMost(clips.size)
-                val cur = clips.getOrNull(idx)
-                if (cur != null && abs(player.playbackParameters.speed - cur.speed) > 0.001f) {
-                    player.setPlaybackSpeed(cur.speed)
+            val now = System.nanoTime()
+            val dtMs = (now - last) / 1_000_000L
+            last = now
+            if (!playing) continue
+            val total = clips.maxOfOrNull { it.endMs } ?: 0L
+            if (posMs >= total) {
+                player.pause()
+                playing = false
+                continue
+            }
+            val idx = clips.indexOfFirst { posMs >= it.startMs && posMs < it.endMs }
+            if (idx < 0) {
+                // Gap: player ruka rahe, ghadi se aage badho
+                if (player.isPlaying) player.pause()
+                ctrl[0] = -1
+                posMs = (posMs + dtMs).coerceAtMost(total)
+            } else {
+                val cl = clips[idx]
+                if (ctrl[0] != idx) {
+                    val src = ((posMs - cl.startMs) * cl.speed).toLong()
+                    player.seekTo(idx, src.coerceIn(0L, (cl.sourceLenMs - 1).coerceAtLeast(0L)))
+                    player.setPlaybackSpeed(cl.speed)
+                    player.play()
+                    ctrl[0] = idx
+                } else {
+                    if (abs(player.playbackParameters.speed - cl.speed) > 0.001f) {
+                        player.setPlaybackSpeed(cl.speed)
+                    }
+                    if (player.isPlaying) {
+                        posMs = cl.startMs + (player.currentPosition.coerceAtLeast(0L) / cl.speed).toLong()
+                    } else if (player.playbackState == Player.STATE_ENDED ||
+                        player.currentPosition >= cl.sourceLenMs - 60
+                    ) {
+                        // Clip khatam: ghadi se aage badho
+                        posMs += dtMs
+                    } else if (player.playbackState == Player.STATE_READY) {
+                        player.play()
+                    }
                 }
-                var base = 0L
-                for (i in 0 until idx) base += clips[i].lengthMs
-                val speed = cur?.speed ?: 1f
-                posMs = base + (player.currentPosition.coerceAtLeast(0L) / speed).toLong()
             }
         }
     }
@@ -380,7 +412,7 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
             if (added.isEmpty()) {
                 toast("Ye file load nahi ho payi (format support nahi ya kharab file)")
             } else {
-                commit(newClips = clips + added)
+                commit(newClips = clips + layoutSequential(added, totalMs()))
             }
         }
     }
@@ -404,39 +436,37 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
         }
         if (playing) {
             player.pause()
+            playing = false
         } else {
-            if (player.playbackState == Player.STATE_ENDED || posMs >= totalMs() - 50) {
+            if (posMs >= totalMs() - 50) {
                 posMs = 0L
-                seekGlobal(0L)
                 scope.launch { scrollState.scrollTo(0) }
             }
-            clips.getOrNull(player.currentMediaItemIndex)?.let { player.setPlaybackSpeed(it.speed) }
-            player.play()
+            ctrl[0] = -2
+            playing = true
         }
     }
 
     fun splitAtPlayhead() {
-        var start = 0L
-        for ((i, cl) in clips.withIndex()) {
-            val end = start + cl.lengthMs
-            if (posMs in start..end) {
-                val off = posMs - start
-                if (off < 300 || cl.lengthMs - off < 300) {
-                    toast("Playhead ko clip ke beech me lao")
-                    return
-                }
-                val splitAt = cl.trimStartMs + (off * cl.speed).toLong()
-                val list = clips.toMutableList()
-                list[i] = cl.copy(trimEndMs = splitAt)
-                list.add(i + 1, cl.copy(id = Ids.next(), trimStartMs = splitAt))
-                commit(newClips = list)
-                return
-            }
-            start = end
+        val i = clips.indexOfFirst { posMs >= it.startMs && posMs < it.endMs }
+        if (i < 0) {
+            toast("Playhead kisi clip ke upar rakho")
+            return
         }
-        toast("Pehle video add karo")
+        val cl = clips[i]
+        val off = posMs - cl.startMs
+        if (off < 300 || cl.lengthMs - off < 300) {
+            toast("Playhead ko clip ke beech me lao")
+            return
+        }
+        val splitAt = cl.trimStartMs + (off * cl.speed).toLong()
+        val list = clips.toMutableList()
+        list[i] = cl.copy(trimEndMs = splitAt)
+        list.add(i + 1, cl.copy(id = Ids.next(), trimStartMs = splitAt, startMs = cl.startMs + off))
+        commit(newClips = list)
     }
 
+    // Delete: clip hat jati hai, uski jagah khaali rehti hai (Premiere ke "lift" jaisa)
     fun deleteSelected() {
         val id = selectedId
         if (id == null) {
@@ -447,26 +477,49 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
         selectedId = null
     }
 
+    // Ripple delete: clip hatao aur peeche ki clips aage khiskao (gap band)
+    fun rippleDeleteSelected() {
+        val id = selectedId
+        val me = clips.firstOrNull { it.id == id }
+        if (me == null) {
+            toast("Pehle clip pe tap karke select karo")
+            return
+        }
+        val len = me.lengthMs
+        commit(
+            newClips = clips.filterNot { it.id == me.id }
+                .map { if (it.startMs >= me.endMs) it.copy(startMs = (it.startMs - len).coerceAtLeast(0L)) else it }
+        )
+        selectedId = null
+    }
+
     fun duplicateSelected() {
         val id = selectedId ?: return
-        val i = clips.indexOfFirst { it.id == id }
-        if (i < 0) return
-        val list = clips.toMutableList()
-        val copy = clips[i].copy(id = Ids.next())
-        list.add(i + 1, copy)
-        commit(newClips = list)
+        val me = clips.firstOrNull { it.id == id } ?: return
+        val copy = me.copy(id = Ids.next(), startMs = totalMs())
+        commit(newClips = clips + copy)
         selectedId = copy.id
     }
 
+    // Speed badalne par clip lambi/chhoti hoti hai; peeche ki clips khiskti hain
     fun applySpeed(s: Float) {
         val id = selectedId ?: return
-        commit(newClips = clips.map { if (it.id == id) it.copy(speed = s) else it })
+        val me = clips.firstOrNull { it.id == id } ?: return
+        val newLen = (me.sourceLenMs / s).toLong()
+        val delta = newLen - me.lengthMs
+        commit(newClips = clips.map {
+            when {
+                it.id == id -> it.copy(speed = s)
+                it.startMs >= me.endMs -> it.copy(startMs = (it.startMs + delta).coerceAtLeast(0L))
+                else -> it
+            }
+        })
         showSpeed = false
     }
 
-    fun trimClip(id: Long, newStart: Long, newEnd: Long) {
+    fun trimClip(id: Long, newTrimStart: Long, newTrimEnd: Long, newStartMs: Long) {
         commit(newClips = clips.map {
-            if (it.id == id) it.copy(trimStartMs = newStart, trimEndMs = newEnd) else it
+            if (it.id == id) it.copy(trimStartMs = newTrimStart, trimEndMs = newTrimEnd, startMs = newStartMs) else it
         })
     }
 
@@ -501,13 +554,13 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
 
     fun skipClip(next: Boolean) {
         if (clips.isEmpty()) return
-        val b = mutableListOf(0L)
-        var acc = 0L
+        val b = mutableListOf(0L, totalMs())
         for (cl in clips) {
-            acc += cl.lengthMs
-            b.add(acc)
+            b.add(cl.startMs)
+            b.add(cl.endMs)
         }
-        val t = if (next) b.firstOrNull { it > posMs + 100 } else b.lastOrNull { it < posMs - 100 }
+        val pts = b.distinct().sorted()
+        val t = if (next) pts.firstOrNull { it > posMs + 100 } else pts.lastOrNull { it < posMs - 100 }
         jumpTo(t ?: if (next) totalMs() else 0L)
     }
 
@@ -535,45 +588,57 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
         }
     }
 
-    // Clip ko drag karke order badalna
-    fun reorderClip(id: Long, deltaMs: Long) {
-        val i = clips.indexOfFirst { it.id == id }
-        if (i < 0) return
-        var start = 0L
-        for (k in 0 until i) start += clips[k].lengthMs
-        val me = clips[i]
-        val center = start + me.lengthMs / 2 + deltaMs
-        val others = clips.filterIndexed { idx, _ -> idx != i }
-        var acc = 0L
-        var target = others.size
-        for ((j, o) in others.withIndex()) {
-            if (center < acc + o.lengthMs / 2) {
-                target = j
-                break
-            }
-            acc += o.lengthMs
+    // Clip ko drag karke kahin bhi rakhna (gap ban sakta hai); kinaaron pe snap hota hai
+    fun moveClip(id: Long, deltaMs: Long) {
+        val me = clips.firstOrNull { it.id == id } ?: return
+        val others = clips.filter { it.id != id }
+        val len = me.lengthMs
+        var desired = (me.startMs + deltaMs).coerceAtLeast(0L)
+
+        // Snap: 0, dusri clips ke kinaare, playhead
+        val thr = (14f / pxPerMs).toLong()
+        val edges = mutableListOf(0L, posMs)
+        for (o in others) {
+            edges.add(o.startMs)
+            edges.add(o.endMs)
         }
-        if (target == i) return
-        val list = others.toMutableList()
-        list.add(target, me)
-        commit(newClips = list)
+        var bestD = thr + 1
+        var snapped = desired
+        for (e in edges) {
+            val d1 = abs(desired - e)
+            if (d1 < bestD) {
+                bestD = d1
+                snapped = e
+            }
+            val d2 = abs(desired + len - e)
+            if (d2 < bestD) {
+                bestD = d2
+                snapped = e - len
+            }
+        }
+        if (bestD <= thr) desired = snapped.coerceAtLeast(0L)
+
+        // Overlap nahi hone dena: sabse paas ki khaali jagah chuno
+        fun free(st: Long) = others.none { st < it.endMs && st + len > it.startMs }
+        var best = desired
+        if (!free(desired)) {
+            val cands = mutableListOf(0L)
+            for (o in others) {
+                cands.add(o.endMs)
+                cands.add(o.startMs - len)
+            }
+            best = cands.filter { it >= 0L && free(it) }.minByOrNull { abs(it - desired) }
+                ?: (others.maxOfOrNull { it.endMs } ?: desired)
+        }
+        if (best == me.startMs) return
+        commit(newClips = clips.map { if (it.id == id) it.copy(startMs = best) else it })
     }
 
     val selClip = clips.firstOrNull { it.id == selectedId }
     val selClipNow by rememberUpdatedState(selClip)
     val editingTf = showTransform && selClip != null
-    val activeClip: Clip? = run {
-        var s0 = 0L
-        var found: Clip? = null
-        for (cl in clips) {
-            if (posMs < s0 + cl.lengthMs) {
-                found = cl
-                break
-            }
-            s0 += cl.lengthMs
-        }
-        found ?: clips.lastOrNull()
-    }
+    val activeClip: Clip? = clips.firstOrNull { posMs >= it.startMs && posMs < it.endMs } ?: clips.lastOrNull()
+    val inGap = clips.isNotEmpty() && clips.none { posMs >= it.startMs && posMs < it.endMs }
     val activeTf = activeClip?.transform ?: Transform()
 
     LaunchedEffect(selectedId) {
@@ -693,6 +758,7 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
                         applyPreviewTransform(v, activeTf)
                     }
                 )
+                if (inGap) Box(Modifier.fillMaxSize().background(Color.Black))
                 GridOverlay(grid, aspect, Modifier.fillMaxSize())
                 if (outlines && clips.isNotEmpty()) OutlineOverlay(aspect, Modifier.fillMaxSize())
             }
@@ -836,9 +902,12 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
                 posMs = ms
                 seekGlobal(ms)
             },
-            onUserDrag = { player.pause() },
-            onTrim = { id, s, e -> trimClip(id, s, e) },
-            onReorder = { id, d -> reorderClip(id, d) },
+            onUserDrag = {
+                player.pause()
+                playing = false
+            },
+            onTrim = { id, ts, te, st -> trimClip(id, ts, te, st) },
+            onMove = { id, d -> moveClip(id, d) },
             onMarkerClick = { jumpTo(it.timeMs) }
         )
 
@@ -862,13 +931,10 @@ fun EditorScreen(projectId: String, onBack: () -> Unit, onOpenSettings: () -> Un
                 onSplit = { splitAtPlayhead() },
                 onDuplicate = { duplicateSelected() },
                 onDelete = { deleteSelected() },
+                onRippleDelete = { rippleDeleteSelected() },
                 onTransform = {
                     // Playhead ko clip ke andar le aao, taaki badlav preview me dikhe
-                    var st = 0L
-                    for (cl in clips) {
-                        if (cl.id == selClip.id) break
-                        st += cl.lengthMs
-                    }
+                    val st = selClip.startMs
                     if (posMs < st || posMs >= st + selClip.lengthMs) jumpTo(st + 1)
                     showTransform = true
                 },

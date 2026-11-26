@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.media3.common.C
 import androidx.media3.common.Effect
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.SonicAudioProcessor
@@ -141,7 +142,11 @@ class ExportRunner(private val ctx: Context, private val scope: CoroutineScope) 
         val out = File(dir, "BoldCut_${System.currentTimeMillis()}.mp4")
         outFile = out
 
-        val items = clips.map { c ->
+        val sorted = clips.sortedBy { it.startMs }
+        val sequenceBuilder =
+            EditedMediaItemSequence.Builder(setOf(C.TRACK_TYPE_AUDIO, C.TRACK_TYPE_VIDEO))
+        var cursor = 0L
+        for (c in sorted) {
             val mi = MediaItem.Builder()
                 .setUri(c.uri)
                 .setClippingConfiguration(
@@ -168,11 +173,14 @@ class ExportRunner(private val ctx: Context, private val scope: CoroutineScope) 
                 })
             }
             vfx.add(FrameDropEffect.createDefaultFrameDropEffect(s.fps.toFloat()))
-            EditedMediaItem.Builder(mi)
+            val item = EditedMediaItem.Builder(mi)
                 .setEffects(Effects(afx, vfx))
                 .build()
+            if (c.startMs > cursor) sequenceBuilder.addGap((c.startMs - cursor) * 1000L)
+            sequenceBuilder.addItem(item)
+            cursor = c.endMs
         }
-        val sequence = EditedMediaItemSequence.Builder(*items.toTypedArray()).build()
+        val sequence = sequenceBuilder.build()
         val composition = Composition.Builder(sequence).build()
 
         val encoderFactory = DefaultEncoderFactory.Builder(ctx)
