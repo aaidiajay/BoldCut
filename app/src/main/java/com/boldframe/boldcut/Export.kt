@@ -145,6 +145,15 @@ class ExportRunner(private val ctx: Context, private val scope: CoroutineScope) 
         val sorted = clips.sortedBy { it.startMs }
         val sequenceBuilder =
             EditedMediaItemSequence.Builder()
+        // Shuru me gap ho to audio/video tracks pehle se tay karne padte hain.
+        // (Ye setting naye Media3 me hai; reflection se lagate hain taaki build na toote.)
+        for (mName in listOf("experimentalSetForceAudioTrack", "experimentalSetForceVideoTrack")) {
+            runCatching {
+                sequenceBuilder.javaClass
+                    .getMethod(mName, java.lang.Boolean.TYPE)
+                    .invoke(sequenceBuilder, true)
+            }
+        }
         var cursor = 0L
         for (c in sorted) {
             val mi = MediaItem.Builder()
@@ -205,7 +214,19 @@ class ExportRunner(private val ctx: Context, private val scope: CoroutineScope) 
                     exportResult: ExportResult,
                     exportException: ExportException
                 ) {
-                    state = ExportState.Failed(exportException.message ?: "Export fail ho gaya")
+                    val sb = StringBuilder()
+                    sb.append(exportException.message ?: "Export fail ho gaya")
+                    sb.append("\nCode: ").append(exportException.errorCodeName)
+                    var cause: Throwable? = exportException.cause
+                    var depth = 0
+                    while (cause != null && depth < 4) {
+                        sb.append("\n").append(cause.javaClass.simpleName)
+                        val cm = cause.message
+                        if (!cm.isNullOrBlank()) sb.append(": ").append(cm.take(160))
+                        cause = cause.cause
+                        depth++
+                    }
+                    state = ExportState.Failed(sb.toString())
                 }
             })
             .build()
@@ -451,7 +472,7 @@ fun ExportFailedDialog(message: String, onClose: () -> Unit) {
     AlertDialog(
         onDismissRequest = onClose,
         title = { Text("Export fail ho gaya") },
-        text = { Text(message) },
+        text = { Text(message, fontSize = 12.sp) },
         confirmButton = { TextButton(onClick = onClose) { Text("OK") } }
     )
 }
