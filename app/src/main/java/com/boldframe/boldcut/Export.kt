@@ -185,7 +185,17 @@ class ExportRunner(private val ctx: Context, private val scope: CoroutineScope) 
             val item = EditedMediaItem.Builder(mi)
                 .setEffects(Effects(afx, vfx))
                 .build()
-            if (c.startMs > cursor) sequenceBuilder.addGap((c.startMs - cursor) * 1000L)
+            // Media3 video me gap support nahi karta: khaali jagah ko kaali image se bharte hain
+            if (c.startMs - cursor > 40L) {
+                val gapFx = mutableListOf<Effect>()
+                gapFx.add(Presentation.createForWidthAndHeight(w, h, Presentation.LAYOUT_SCALE_TO_FIT))
+                val gapItem = EditedMediaItem.Builder(MediaItem.fromUri(blackImageUri()))
+                    .setDurationUs((c.startMs - cursor) * 1000L)
+                    .setFrameRate(s.fps)
+                    .setEffects(Effects(emptyList<AudioProcessor>(), gapFx))
+                    .build()
+                sequenceBuilder.addItem(gapItem)
+            }
             sequenceBuilder.addItem(item)
             cursor = c.endMs
         }
@@ -254,6 +264,17 @@ class ExportRunner(private val ctx: Context, private val scope: CoroutineScope) 
 
     fun reset() {
         state = ExportState.Idle
+    }
+
+    private fun blackImageUri(): Uri {
+        val f = File(ctx.cacheDir, "black_gap.png")
+        if (!f.exists()) {
+            val bmp = android.graphics.Bitmap.createBitmap(64, 64, android.graphics.Bitmap.Config.ARGB_8888)
+            bmp.eraseColor(android.graphics.Color.BLACK)
+            f.outputStream().use { bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+            bmp.recycle()
+        }
+        return Uri.fromFile(f)
     }
 
     private fun onTransformDone(file: File) {

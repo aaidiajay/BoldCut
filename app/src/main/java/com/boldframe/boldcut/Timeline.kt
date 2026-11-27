@@ -419,6 +419,9 @@ private fun ClipBlock(
         }
     }
 
+    // Chhoti clip pe handles clip se bade na dikhein
+    val hw = maxOf(6.dp, minOf(16.dp, widthDp / 3))
+
     val shape = RoundedCornerShape(4.dp)
     Box(
         Modifier
@@ -492,6 +495,7 @@ private fun ClipBlock(
 
         if (selected) {
             TrimHandle(
+                handleWidth = hw,
                 modifier = Modifier.align(Alignment.CenterStart),
                 onDrag = { dx ->
                     val c = curClip
@@ -503,6 +507,7 @@ private fun ClipBlock(
                 onEnd = { commitTrim() }
             )
             TrimHandle(
+                handleWidth = hw,
                 modifier = Modifier.align(Alignment.CenterEnd),
                 onDrag = { dx ->
                     val c = curClip
@@ -521,12 +526,17 @@ private fun durationLabel(ms: Long): String =
     String.format(Locale.US, "%d:%02d", ms / 60000, (ms / 1000) % 60)
 
 @Composable
-private fun TrimHandle(modifier: Modifier, onDrag: (Float) -> Unit, onEnd: () -> Unit) {
+private fun TrimHandle(
+    handleWidth: androidx.compose.ui.unit.Dp,
+    modifier: Modifier,
+    onDrag: (Float) -> Unit,
+    onEnd: () -> Unit
+) {
     val drag by rememberUpdatedState(onDrag)
     val end by rememberUpdatedState(onEnd)
     Box(
         modifier
-            .width(16.dp)
+            .width(handleWidth)
             .fillMaxHeight()
             .background(Accent)
             .pointerInput(Unit) {
